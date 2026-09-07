@@ -29,6 +29,9 @@
 /assets/*
 !/assets/spun.svg
 !/assets/First-Light.flac
+!/assets/screenshots/
+/assets/screenshots/*
+!/assets/screenshots/spun-player.png
 !/assets/icons/
 /assets/icons/*
 !/assets/icons/*.svg

@@ -1,5 +1,7 @@
 # Spun
 
+![Spun with album artwork on the CD and Cider music search alongside it](assets/screenshots/spun-player.png)
+
 A CD-shaped music player for Linux. Your album artwork becomes the disc, with a quiet interface inspired by Material Design 3 and colors that follow Noctalia.
 
 Play local music, or control Apple Music through Cider: browse songs, albums and playlists, search your library, and manage the queue without constantly switching apps.
@@ -99,7 +101,7 @@ You can then delete the Spun source folder. Your music stays where it was. Prefe
 
 Spun does not ask for your Apple Music password. The Cider application token is stored locally with owner-only file permissions in `~/.config/spun/cider-connection.json`; preferences live in `~/.config/spun/settings.ini`. Artwork and music metadata may be fetched as part of playback and browsing. Do not share your token, private configuration, listening history or personal logs in issue reports.
 
-This repository contains source code, license notices, UI icons and an original synthesized demo with generated cover art. It contains no personal desktop screenshots, recordings or account configuration.
+This repository contains source code, license notices, UI icons, an original synthesized demo with generated cover art, and the approved project screenshot above. Private account configuration, logs and other desktop captures are excluded.
 
 ## Development
 
