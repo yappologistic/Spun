@@ -1,0 +1,46 @@
+# Publish only the project source and explicitly approved assets.
+# New top-level directories or file types must be added here deliberately.
+/*
+!/.gitignore
+!/CMakeLists.txt
+!/README.md
+!/LICENSE
+!/NOTICE
+
+!/src/
+/src/*
+!/src/*.cpp
+!/src/*.h
+
+!/qml/
+/qml/*
+!/qml/*.qml
+
+!/scripts/
+/scripts/*
+!/scripts/*.sh
+!/scripts/*.py
+
+!/licenses/
+/licenses/*
+!/licenses/*.txt
+
+!/assets/
+/assets/*
+!/assets/spun.svg
+!/assets/First-Light.flac
+!/assets/icons/
+/assets/icons/*
+!/assets/icons/*.svg
+
+# Never publish credentials, private state, editor backups or generated caches.
+.env*
+*.ini
+*.user
+*.log
+*.key
+*.pem
+*~
+*.bak
+__pycache__/
+cider-connection.json

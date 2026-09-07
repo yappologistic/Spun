@@ -1,0 +1,37 @@
+Spun
+https://github.com/yappologistic/Spun
+
+Required Notice: Copyright 2026 yappologistic (https://github.com/yappologistic)
+
+Spun's original source code, app icon, generated artwork and synthesized
+First Light soundcheck are offered under PolyForm Noncommercial 1.0.0.
+See LICENSE for the complete terms. These terms do not replace the licenses
+of third-party components identified below.
+
+Material Symbols Rounded
+Copyright Google LLC
+Source: https://github.com/google/material-design-icons/tree/master/symbols/web
+The selected SVG icons in assets/icons are licensed under Apache License 2.0.
+A copy is provided in licenses/MaterialSymbols-LICENSE.txt.
+The artwork paths are retained. Spun adds a render-only element identifier
+at runtime to measure and align visible bounds.
+
+Material motion references
+Spun's Qt motion implementation references Google's Material motion roles
+and Material Web easing tokens. Its spring tuning is specific to Spun.
+https://developer.android.com/reference/kotlin/androidx/compose/material3/MotionScheme
+https://github.com/material-components/material-web/blob/main/tokens/versions/v0_192/_md-sys-motion.scss
+Material Web is Copyright Google LLC, licensed under Apache License 2.0;
+see licenses/MaterialSymbols-LICENSE.txt for the license text.
+
+External dependencies
+Qt and TagLib are installed separately and dynamically linked. They are
+not relicensed by Spun. Their respective licenses and any applicable
+redistribution obligations continue to apply.
+https://www.qt.io/development/open-source-lgpl-obligations
+https://taglib.org/
+
+Fonts
+No fonts are bundled. The optional recommended Google Sans Flex font is
+licensed separately under the SIL Open Font License 1.1.
+https://github.com/googlefonts/googlesans-flex/blob/main/OFL.txt
