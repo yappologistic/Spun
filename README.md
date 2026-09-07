@@ -1,12 +1,30 @@
-# Spun
+<h1 align="center">Spun</h1>
 
-![Spun with album artwork on the CD and Cider music search alongside it](assets/screenshots/spun-player.png)
+<p align="center">A CD-shaped music player for Linux.</p>
 
-A CD-shaped music player for Linux. Your album artwork becomes the disc, with a quiet interface inspired by Material Design 3 and colors that follow Noctalia.
+<p align="center">
+  <img src="assets/screenshots/spun-player.png" alt="Spun with album artwork on the CD and Cider music search alongside it" width="1000">
+</p>
 
-Play local music, or control Apple Music through Cider: browse songs, albums and playlists, search your library, and manage the queue without constantly switching apps.
+<p align="center">
+  <a href="https://buymeacoffee.com/E_Gurl">
+    <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Support Spun on Buy Me a Coffee" width="217" height="60">
+  </a>
+  <br>
+  <sub>Optional support for Spun's development.</sub>
+</p>
 
-**Spun is source-available under PolyForm Noncommercial 1.0.0.** It is free for the purposes allowed by that license, including personal and noncommercial use. It is not an OSI-approved open-source project. See [License](#license).
+<p align="center">
+  <a href="#install-on-cachyos-or-arch-linux">Install</a> ·
+  <a href="#start-listening">Get started</a> ·
+  <a href="#inside-the-player">Features</a> ·
+  <a href="#troubleshooting-and-privacy">Help</a> ·
+  <a href="#license">License</a>
+</p>
+
+Play local music, or control Apple Music through Cider. Your album artwork becomes the disc, with a quiet interface inspired by Material Design 3 and colors that follow Noctalia. Browse songs, albums and playlists, search your library, and manage the queue without constantly switching apps.
+
+**Source-available · PolyForm Noncommercial 1.0.0.** Free for the purposes allowed by the license, including personal and noncommercial use. This is not an OSI-approved open-source project. [Read the license details](#license).
 
 ## Install on CachyOS or Arch Linux
 
@@ -23,7 +41,12 @@ cd Spun
 
 Open **Spun** from your application menu, or run `./scripts/run.sh` from the Spun folder. Keep that folder where it is: the launcher points to it. If you move it, run `./scripts/install-launcher.sh` again from its new location.
 
+<details>
+<summary>Building on another Linux distribution</summary>
+
 Other Linux distributions need a C++20 compiler, CMake 3.22+, Ninja, pkg-config, Python 3, Qt 6.8+ with Quick Controls, Multimedia, SVG and development files, and TagLib 2.0+ development files. Package names differ between distributions. Spun is developed on CachyOS with Hyprland and Noctalia; desktop integration can vary elsewhere.
+
+</details>
 
 ## Start listening
 
@@ -56,7 +79,8 @@ Spun uses your system font by default. Choose any installed family in **More →
 
 For the intended appearance, we recommend [Google Sans Flex](https://github.com/googlefonts/googlesans-flex/releases). Download the font from its official releases, install the TTF with your desktop's font installer, reopen Spun, and select it in Preferences. The font has its own [SIL Open Font License](https://github.com/googlefonts/googlesans-flex/blob/main/OFL.txt); keep the accompanying license with your font files.
 
-### Shortcuts
+<details>
+<summary><strong>Keyboard shortcuts</strong></summary>
 
 | Action | Shortcut |
 | --- | --- |
@@ -73,6 +97,8 @@ For the intended appearance, we recommend [Google Sans Flex](https://github.com/
 | Keyboard help | F1 |
 | Back / dismiss | Escape |
 | Quit | Ctrl + Q |
+
+</details>
 
 ## Update or remove
 
@@ -105,6 +131,9 @@ This repository contains source code, license notices, UI icons, an original syn
 
 ## Development
 
+<details>
+<summary>Build, test and benchmark</summary>
+
 Build the diagnostic companion and run isolated playback, API-fixture and UI checks:
 
 ```bash
@@ -115,6 +144,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QSG_RENDER_LOOP=basic QT_QPA
 The tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. The normal player is built separately from the diagnostic executable.
 
 For controlled performance measurements, run `python3 scripts/benchmark.py --output /tmp/spun-performance`. Its isolated scenes do not connect to your Cider instance. Offscreen measurements are useful comparisons, not whole-desktop GPU measurements. Regenerate the original soundcheck with `python3 scripts/make-demo.py` after building; this additionally requires FFmpeg.
+
+</details>
 
 Bug reports are welcome. Before submitting substantial code contributions, open an issue to discuss scope and contributor licensing. Any future commercial distribution needs appropriate rights to contributed code as well as compliance with third-party licenses; submitting a patch does not transfer its copyright.
 
