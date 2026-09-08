@@ -31,6 +31,7 @@ class Cider : public QObject {
     Q_PROPERTY(bool liveConnected READ liveConnected NOTIFY liveChanged)
     Q_PROPERTY(bool libraryVisible READ libraryVisible WRITE setLibraryVisible NOTIFY connectionChanged)
     Q_PROPERTY(bool available READ available NOTIFY trackChanged)
+    Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(QString artist READ artist NOTIFY trackChanged)
     Q_PROPERTY(QString album READ album NOTIFY trackChanged)
@@ -94,6 +95,7 @@ public:
     Q_INVOKABLE void reconnect();
     bool available() const { return m_available; }
     ~Cider() override;
+    QString trackKey() const { return count() ? m_track : QString{}; }
     QString title() const { return m_title.isEmpty() ? "Cider" : m_title; }
     QString artist() const { return m_artist; }
     QString album() const { return m_album; }

@@ -39,7 +39,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib>=2.0)
 qt_add_library(spun_core STATIC
     src/symbol.cpp src/symbol.h src/typography.cpp src/typography.h
-    src/listening.cpp src/listening.h
+    src/listening.cpp src/listening.h src/tapesound.cpp src/tapesound.h src/vinylnoise.cpp src/vinylnoise.h
     src/musicactions.cpp src/musicactions.h
     src/library.cpp src/library.h src/lyrics.cpp src/lyrics.h src/artwork.cpp src/artwork.h
     src/player.cpp src/player.h src/disc.cpp src/disc.h src/mpris.cpp src/mpris.h
@@ -67,7 +67,7 @@ function(spun_application target)
     # Compile QML at build time, preserving existing resource URLs and the UI.
     qt_add_qml_module(${target} URI SpunUi VERSION 1.0 NO_PLUGIN
         NO_RESOURCE_TARGET_PATH RESOURCE_PREFIX "/" OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${target}-qml"
-        QML_FILES qml/SpunButton.qml qml/SpunSlider.qml qml/QuickJump.qml qml/NextTrackTip.qml qml/SavedQueuePicker.qml qml/Tonearm.qml qml/SpunText.qml qml/FontPicker.qml qml/SpunStateLayer.qml qml/SpunSpring.qml qml/SpunPopupEnter.qml qml/SpunStyle.qml qml/TrackContent.qml qml/SpunSearchField.qml qml/MenuEntry.qml qml/PreferenceSwitch.qml qml/TrackMenu.qml qml/Main.qml qml/LibraryPanel.qml qml/SpunToolTip.qml qml/IconButton.qml qml/Glyph.qml)
+        QML_FILES qml/SpunButton.qml qml/SpunSlider.qml qml/SeekSlider.qml qml/QuickJump.qml qml/NextTrackTip.qml qml/SavedQueuePicker.qml qml/Tonearm.qml qml/CassetteReels.qml qml/SpunText.qml qml/FontPicker.qml qml/SpunStateLayer.qml qml/SpunSpring.qml qml/SpunPopupEnter.qml qml/SpunStyle.qml qml/TrackContent.qml qml/SpunSearchField.qml qml/MenuEntry.qml qml/PreferenceSwitch.qml qml/TrackMenu.qml qml/Main.qml qml/LibraryPanel.qml qml/SpunToolTip.qml qml/IconButton.qml qml/Glyph.qml)
     # Preserve the exact SVGs and URLs; Qt's default threshold leaves many of
     # these small resources uncompressed. Parsed symbols are already cached.
     if(QT_FEATURE_zstd)

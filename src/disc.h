@@ -6,12 +6,18 @@
 class Disc : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(bool vinyl READ vinyl WRITE setVinyl NOTIFY vinylChanged)
+    Q_PROPERTY(bool cassette READ cassette WRITE setCassette NOTIFY cassetteChanged)
+    Q_PROPERTY(QColor shellColor READ shellColor WRITE setShellColor NOTIFY cassetteChanged)
     Q_PROPERTY(QImage artwork READ artwork WRITE setArtwork NOTIFY artworkChanged)
     Q_PROPERTY(QColor labelColor READ labelColor WRITE setLabelColor NOTIFY labelColorChanged)
     Q_PROPERTY(bool overlay READ overlay WRITE setOverlay NOTIFY overlayChanged)
 public:
     explicit Disc(QQuickItem *parent = nullptr);
     void paint(QPainter *painter) override;
+    bool cassette() const { return m_cassette; }
+    void setCassette(bool v) { if(m_cassette==v)return;m_cassette=v;update();emit cassetteChanged(); }
+    QColor shellColor() const { return m_shellColor; }
+    void setShellColor(QColor v) { if(m_shellColor==v)return;m_shellColor=v;update();emit cassetteChanged(); }
     bool vinyl() const { return m_vinyl; }
     void setVinyl(bool value) { if(m_vinyl==value)return; m_vinyl=value; update(); emit vinylChanged(); }
     QImage artwork() const { return m_art; }
@@ -23,6 +29,7 @@ public:
     static QImage fallbackArt(int size = 1000);
 signals:
     void vinylChanged();
+    void cassetteChanged();
     void artworkChanged();
     void overlayChanged();
     void labelColorChanged();
@@ -31,16 +38,22 @@ private:
     QColor m_labelColor;
     bool m_overlay = false, m_vinyl = false;
     void paintVinyl(QPainter *painter);
+    void paintCassette(QPainter *painter);
+    bool m_cassette=false;
+    QColor m_shellColor=QColor("#262326");
 };
 
 class ProgressRing : public QQuickItem {
     Q_OBJECT
+    Q_PROPERTY(bool linear READ linear WRITE setLinear NOTIFY changed)
     Q_PROPERTY(qreal progress READ progress WRITE setProgress NOTIFY changed)
     Q_PROPERTY(qreal phase READ phase WRITE setPhase NOTIFY changed)
     Q_PROPERTY(qreal amplitude READ amplitude WRITE setAmplitude NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent WRITE setAccent NOTIFY changed)
 public:
     explicit ProgressRing(QQuickItem *parent = nullptr) : QQuickItem(parent) { setFlag(ItemHasContents); }
+    bool linear() const { return m_linear; }
+    void setLinear(bool value) { if (m_linear==value) return; m_linear=value; update(); emit changed(); }
     qreal progress() const { return m_progress; }
     qreal phase() const { return m_phase; }
     qreal amplitude() const { return m_amplitude; }
@@ -54,6 +67,7 @@ signals:
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
 private:
+    bool m_linear=false;
     qreal m_progress=0, m_phase=0, m_amplitude=0;
     QColor m_accent;
 };

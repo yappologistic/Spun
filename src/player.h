@@ -21,6 +21,13 @@ struct LoadedArtwork { QImage image; QString file; bool created = false; };
 
 class Player : public QObject {
     Q_OBJECT
+    Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
+    Q_PROPERTY(int vinylSpeed READ vinylSpeed WRITE setVinylSpeed NOTIFY settingsChanged)
+    Q_PROPERTY(bool horizontalSeek READ horizontalSeek WRITE setHorizontalSeek NOTIFY settingsChanged)
+    Q_PROPERTY(bool vinylCrackle READ vinylCrackle WRITE setVinylCrackle NOTIFY settingsChanged)
+    Q_PROPERTY(bool vinylStatic READ vinylStatic WRITE setVinylStatic NOTIFY settingsChanged)
+    Q_PROPERTY(bool vinylSkips READ vinylSkips WRITE setVinylSkips NOTIFY settingsChanged)
+    Q_PROPERTY(bool cassetteSounds READ cassetteSounds WRITE setCassetteSounds NOTIFY settingsChanged)
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(QString artist READ artist NOTIFY trackChanged)
     Q_PROPERTY(QString album READ album NOTIFY trackChanged)
@@ -40,6 +47,7 @@ class Player : public QObject {
     Q_PROPERTY(int repeatMode READ repeatMode WRITE setRepeatMode NOTIFY settingsChanged)
     Q_PROPERTY(bool light READ light WRITE setLight NOTIFY settingsChanged)
     Q_PROPERTY(bool vinyl READ vinyl WRITE setVinyl NOTIFY vinylChanged)
+    Q_PROPERTY(QString medium READ medium WRITE setMedium NOTIFY mediumChanged)
     Q_PROPERTY(bool motion READ motion WRITE setMotion NOTIFY settingsChanged)
     Q_PROPERTY(bool ciderAutoStart READ ciderAutoStart WRITE setCiderAutoStart NOTIFY settingsChanged)
     Q_PROPERTY(bool miniOnTop READ miniOnTop WRITE setMiniOnTop NOTIFY miniOnTopChanged)
@@ -50,6 +58,19 @@ class Player : public QObject {
 public:
     explicit Player(const QString &settingsPath, QObject *parent = nullptr);
     ~Player() override;
+    QString trackKey() const { return currentUrl().toString(); }
+    int vinylSpeed() const { return m_vinylSpeed; }
+    bool horizontalSeek() const { return m_horizontalSeek; }
+    bool vinylCrackle() const { return m_vinylCrackle; }
+    bool vinylStatic() const { return m_vinylStatic; }
+    bool vinylSkips() const { return m_vinylSkips; }
+    void setVinylSpeed(int value);
+    void setHorizontalSeek(bool value);
+    void setVinylCrackle(bool value);
+    void setVinylStatic(bool value);
+    void setVinylSkips(bool value);
+    bool cassetteSounds() const { return m_cassetteSounds; }
+    void setCassetteSounds(bool enabled);
     QString title() const;
     QString artist() const;
     QString album() const;
@@ -69,7 +90,9 @@ public:
     bool shuffle() const { return m_shuffle; }
     int repeatMode() const { return m_repeat; }
     bool light() const { return m_light; }
-    bool vinyl() const { return m_vinyl; }
+    bool vinyl() const { return m_medium=="vinyl"; }
+    QString medium() const { return m_medium; }
+    void setMedium(const QString &value);
     void setVinyl(bool value);
     bool motion() const { return m_motion; }
     bool ciderAutoStart() const { return m_ciderAutoStart; }
@@ -110,6 +133,7 @@ public:
     static Track readTrack(const QString &path);
 signals:
     void vinylChanged();
+    void mediumChanged();
     void discDetailsChanged();
     void trackChanged();
     void artworkChanged();
@@ -146,7 +170,10 @@ private:
     QSet<QString> m_shuffleVisited;
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
-    bool m_vinyl = false;
+    int m_vinylSpeed=33;
+    bool m_horizontalSeek=false, m_vinylCrackle=false, m_vinylStatic=false, m_vinylSkips=false;
+    bool m_cassetteSounds=true;
+    QString m_medium = "cd";
     bool m_shuffle = false, m_light = false, m_motion = true, m_busy = false, m_backgroundBlur = false, m_miniMode = false, m_miniOnTop = false;
     int m_repeat = 0;
     qint64 m_restorePosition = -1;

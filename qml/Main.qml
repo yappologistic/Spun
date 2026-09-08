@@ -9,12 +9,14 @@ ApplicationWindow {
     title: "Spun"
     visible: true
     width: miniMode ? 300 : sideOpen ? 860 : 530
-    height: miniMode ? 354 : 730
+    height: miniMode ? (showHorizontalSeek ? 382 : 354) : 730
     minimumWidth: 300; maximumWidth: 860
     minimumHeight: 300; maximumHeight: 730
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | (miniPinned && !native.supportsBlur ? Qt.WindowStaysOnTopHint : 0)
     font.family: SpunStyle.family
+    readonly property bool cassette: player.medium === "cassette"
+    onCassetteChanged: Qt.callLater(function() { stopSwap(); scrubber.cancelScrub(); updateMask() })
     readonly property bool vinyl: player.vinyl
     onVinylChanged: Qt.callLater(updateMask)
     property bool useCider: !testMode && root.ciderService.available
@@ -36,6 +38,29 @@ ApplicationWindow {
         onTriggered: root.refreshOpenCiderDetails()
     }
     property var deckPlayer: useCider ? root.ciderService : player
+    readonly property string cassetteTrackIdentity: (useCider ? "cider:" : "local:") + (deckPlayer.trackKey || "")
+    onCassetteTrackIdentityChanged: Qt.callLater(syncTapeSound)
+    function syncTapeSound() { tapeSound.observe(useCider ? "cider" : "local", deckPlayer.trackKey || "") }
+    Binding { target: tapeSound; property: "enabled"; value: root.cassette && player.cassetteSounds }
+    Binding { target: tapeSound; property: "volume"; value: root.deckPlayer.volume }
+    Binding { target: vinylNoise; property: "active"; value: root.vinyl && root.deckPlayer.playing && !root.needleDragging }
+    Binding { target: vinylNoise; property: "crackle"; value: player.vinylCrackle }
+    Binding { target: vinylNoise; property: "hiss"; value: player.vinylStatic }
+    Binding { target: vinylNoise; property: "volume"; value: root.deckPlayer.volume }
+    readonly property bool needleDragging: armLoader.item ? armLoader.item.dragging : false
+    function skipGroove() {
+        if (!vinyl || !player.vinylSkips || !deckPlayer.playing || needleDragging || swapRunning || (useCider && (!ciderService.canSeek || ciderService.controlBusy))) return false
+        const jump = player.vinylSpeed === 45 ? 60000/45 : 1800
+        if (deckPlayer.position < 5000 || deckPlayer.position + jump > deckPlayer.duration - 5000) return false
+        deckPlayer.seek(deckPlayer.position + jump)
+        return true
+    }
+    Timer {
+        id: grooveSkipTimer; objectName: "grooveSkipTimer"
+        interval: 45000 + Math.floor(Math.random()*35000); repeat: true
+        running: root.vinyl && player.vinylSkips && root.deckPlayer.playing && !root.needleDragging
+        onTriggered: { root.skipGroove(); interval = 45000 + Math.floor(Math.random()*35000) }
+    }
     onUseCiderChanged: { recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
     property bool lyricsView: false
     property real swapOffset: 0
@@ -271,6 +296,13 @@ ApplicationWindow {
     onBackgroundBlurChanged: { native.effects(root, backgroundBlur); Qt.callLater(updateMask) }
     property bool muted: false
     property real rememberedVolume: .65
+    property real cassetteLeftAngle: 0
+    property real cassetteRightAngle: 0
+    property real outgoingCassetteLeftAngle: 0
+    property real outgoingCassetteRightAngle: 0
+    readonly property real vinylDegreesPerSecond: player.vinylSpeed === 45 ? 270 : player.vinylSpeed === 33 ? 200 : 9
+    readonly property bool showHorizontalSeek: player.horizontalSeek && !cassette && deckPlayer.count > 0
+    onShowHorizontalSeekChanged: Qt.callLater(updateMask)
     property real spinAngle: 0
     property real spinSpeed: 0
     property real wavePhase: 0
@@ -368,9 +400,14 @@ ApplicationWindow {
             const now = Date.now()
             const dt = Math.min(.05, (now-lastTime)/1000)
             lastTime = now
-            const target = root.deckPlayer.playing ? 9 : 0
+            const target = root.deckPlayer.playing ? (root.vinyl ? root.vinylDegreesPerSecond : 9) : 0
             root.spinSpeed += (target-root.spinSpeed)*Math.min(1,dt*2.2)
             if (!root.discFlipped) root.spinAngle = (root.spinAngle+root.spinSpeed*dt)%360
+            if (root.cassette && !root.discFlipped && root.deckPlayer.playing) {
+                const position = Math.max(0, Math.min(1, root.progress))
+                root.cassetteLeftAngle = (root.cassetteLeftAngle + dt * 10000 / Math.sqrt(1936 + 3993 * (1-position))) % 360
+                root.cassetteRightAngle = (root.cassetteRightAngle + dt * 10000 / Math.sqrt(1936 + 3993 * position)) % 360
+            }
             if (root.deckPlayer.playing) root.wavePhase=(root.wavePhase+dt*2.8)%(2*Math.PI)
         }
     }
@@ -472,7 +509,7 @@ ApplicationWindow {
         HoverHandler { id: platterHover }
         // Shadow is circular, so the player keeps its silhouette on any wallpaper.
         Repeater {
-            model: 7
+            model: root.cassette ? 0 : 7
             Rectangle {
                 required property int index
                 anchors.centerIn: parent
@@ -489,8 +526,9 @@ ApplicationWindow {
             opacity: root.outgoingOpacity
             transform: Translate { x: root.outgoingOffset }
             sourceComponent: Item {
-                Disc { vinyl: root.vinyl; anchors.fill: parent; artwork: presentation.outgoing; rotation: root.outgoingAngle }
-                Disc { vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; artwork: presentation.outgoing; rotation: root.cassette ? 0 : root.outgoingAngle }
+                Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                Loader { anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root; outgoing: true } }
             }
         }
         Item {
@@ -511,23 +549,24 @@ ApplicationWindow {
                 }
                 front: Item {
                     anchors.fill: parent
-                    Disc { vinyl: root.vinyl;
+                    Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl;
                         id: face
                         objectName: "discFace"
                         anchors.fill: parent
                         artwork: presentation.artwork
-                        rotation: root.spinAngle
+                        rotation: root.cassette ? 0 : root.spinAngle
                     }
-                    Disc { vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                    Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                    Loader { objectName: "cassetteReelsLoader"; anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root } }
                 }
                 back: Item {
                     objectName: "discBack"
                     anchors.fill: parent
-                    Disc { vinyl: root.vinyl; anchors.fill: parent; labelColor: root.surface }
+                    Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; labelColor: root.surface }
                     SpunText {
                         objectName: "discAlbumTitle"
                         id: albumHeading
-                        x: 84; y: 52; width: 242; height: 50
+                        x: root.cassette ? 38 : 84; y: root.cassette ? 80 : 52; width: root.cassette ? 334 : 242; height: root.cassette ? 40 : 50
                         text: root.lyricsView ? root.deckPlayer.title : root.discDetails.title || root.deckPlayer.album || "Unknown album"
                         font.pixelSize: root.miniMode ? 22 : SpunStyle.title; font.weight: Font.Normal
                         fontSizeMode: Text.Fit; minimumPixelSize: root.miniMode ? 17 : 15
@@ -540,7 +579,7 @@ ApplicationWindow {
                     SpunText {
                         id: albumArtist
                         objectName: "discAlbumArtist"
-                        x: 72; y: 107; width: 266; height: 20
+                        x: 72; y: root.cassette ? 123 : 107; width: 266; height: 20
                         text: root.lyricsView ? root.deckPlayer.artist : root.discDetails.artist || root.deckPlayer.artist
                         font.pixelSize: root.miniMode ? 18 : SpunStyle.body; color: root.mutedInk
                         horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
@@ -550,7 +589,7 @@ ApplicationWindow {
                     }
                     SpunText {
                         objectName: "discAlbumYear"
-                        x: 72; y: 131; width: 266; height: 18
+                        x: 72; y: root.cassette ? 145 : 131; width: 266; height: 18
                         text: root.lyricsView ? "" : root.discDetails.year || ""
                         font.pixelSize: root.miniMode ? 16 : SpunStyle.caption; color: root.accent
                         horizontalAlignment: Text.AlignHCenter
@@ -558,7 +597,7 @@ ApplicationWindow {
                     ListView {
                         id: albumList
                         objectName: "albumTrackList"
-                        x: 68; y: 262; width: 274; height: root.miniMode ? 76 : 82
+                        x: root.cassette ? 38 : 68; y: root.cassette ? 176 : 262; width: root.cassette ? 334 : 274; height: root.cassette ? 116 : root.miniMode ? 76 : 82
                         readonly property int rowHeight: root.miniMode ? 36 : 32
                         property int rememberedRow: 0
                         property string rememberedAlbum: ""
@@ -642,7 +681,7 @@ ApplicationWindow {
                     ListView {
                         id: lyricList
                         objectName: "lyricList"
-                        x: 76; y: 260; width: 258; height: 84
+                        x: root.cassette ? 42 : 76; y: root.cassette ? 176 : 260; width: root.cassette ? 326 : 258; height: root.cassette ? 116 : 84
                         visible: root.lyricsView && lyrics.lines.length > 0
                         model: lyrics.lines; clip: true; spacing: 8
                         boundsBehavior: Flickable.StopAtBounds
@@ -713,7 +752,7 @@ ApplicationWindow {
                         }
                     }
                     Column {
-                        x: 80; y: 262; width: 250; spacing: 4
+                        x: 80; y: root.cassette ? 182 : 262; width: 250; spacing: 4
                         visible: root.lyricsView && !lyrics.lines.length
                         SpunText {
                             width: parent.width; text: lyrics.loading ? "Loading lyrics…" : lyrics.message
@@ -731,7 +770,7 @@ ApplicationWindow {
                     Row {
                         objectName: "discBackFooter"
                         anchors.horizontalCenter: parent.horizontalCenter
-                        y: 348; height: 36; spacing: 10
+                        y: root.cassette ? 298 : 348; height: 36; spacing: 10
                         SpunText {
                             anchors.verticalCenter: parent.verticalCenter
                             visible: !root.lyricsView && root.albumTracks.length > 0
@@ -762,7 +801,7 @@ ApplicationWindow {
                     }
 
                     Column {
-                        x: 80; y: 264; width: 250; spacing: 5
+                        x: 80; y: root.cassette ? 182 : 264; width: 250; spacing: 5
                         visible: !root.lyricsView && root.useCider && !root.albumTracks.length
                         SpunText {
                             width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
@@ -805,6 +844,7 @@ ApplicationWindow {
 
         }
         Loader {
+            id: armLoader
             objectName: "tonearmLoader"
             anchors.fill: parent
             active: root.vinyl
@@ -818,7 +858,7 @@ ApplicationWindow {
                 // Stop the old sequence without releasing that new image.
                 discSwap.stop(); root.resetSwap()
                 if (!root.animate || root.discFlipped || !root.visible || !native.exposed) { presentation.releaseOutgoing(); return }
-                scrubber.cancelScrub(); root.outgoingAngle = root.spinAngle
+                scrubber.cancelScrub(); root.outgoingAngle = root.spinAngle; root.outgoingCassetteLeftAngle = root.cassetteLeftAngle; root.outgoingCassetteRightAngle = root.cassetteRightAngle
                 root.swapOffset = 440; root.outgoingOffset = 0; root.outgoingOpacity = 1; root.incomingOpacity = 0
                 discSwap.departureTime = SpunStyle.enter; discSwap.arrivalTime = SpunStyle.hero
                 discSwap.start()
@@ -844,7 +884,7 @@ ApplicationWindow {
         ProgressRing {
             objectName: "progressRing"
             anchors.fill: parent
-            visible: root.deckPlayer.count > 0
+            visible: !root.cassette && root.deckPlayer.count > 0
             progress: scrubber.scrubbing ? scrubber.previewFraction : root.progress
             phase: root.wavePhase
             amplitude: root.deckPlayer.playing ? 2.8 : 0
@@ -861,7 +901,7 @@ ApplicationWindow {
             readonly property bool canSeek: !root.swapRunning && root.deckPlayer.duration > 0 && (!root.useCider || root.ciderService.canSeek)
             readonly property bool showPreview: canSeek && (scrubbing || (containsMouse && onRim(mouseX,mouseY)))
             cursorShape: canSeek && onRim(mouseX,mouseY) ? Qt.PointingHandCursor : Qt.ArrowCursor
-            function onRim(x,y) { let r=Math.hypot(x-220,y-220); return r > 205 && r < 224 }
+            function onRim(x,y) { let r=Math.hypot(x-220,y-220); return !root.cassette && r > 205 && r < 224 }
             function updatePreview(x,y) {
                 let a=Math.atan2(y-220,x-220)+Math.PI/2
                 if (a < 0) a += 2*Math.PI
@@ -879,6 +919,13 @@ ApplicationWindow {
             }
             onCanceled: cancelScrub()
             onWheel: wheel => { if (root.discFlipped && !onRim(wheel.x,wheel.y)) { wheel.accepted=false; return }; root.deckPlayer.volume = Math.max(0, Math.min(1, root.deckPlayer.volume + wheel.angleDelta.y/2400)); wheel.accepted=true }
+        }
+        SeekSlider {
+            app: root
+            objectName: "cassetteSeek"
+            visible: root.cassette && root.deckPlayer.count > 0
+            x: 70; y: 365; width: 300; height: 36
+
         }
         DropArea {
             anchors.fill: parent
@@ -911,17 +958,22 @@ ApplicationWindow {
         color: root.surface
         SpunText { anchors.centerIn: parent; text: root.time(root.deckPlayer.duration * scrubber.previewFraction); font.pixelSize: SpunStyle.caption; color: root.accent }
     }
+    SeekSlider {
+        app: root; objectName: "miniHorizontalSeek"
+        visible: root.miniMode && root.showHorizontalSeek
+        x: 50; y: 294; width: 200; height: 32
+    }
     Timer { id: miniReveal; interval: 1400 }
     Item {
         visible: root.miniMode
-        x: 50; y: 268; width: 200; height: 84
+        x: 50; y: 268; width: 200; height: root.showHorizontalSeek ? 112 : 84
         HoverHandler { id: miniDockHover }
     }
     Rectangle {
         id: miniControls
         objectName: "miniControls"
         visible: root.miniMode
-        x: 50; y: 302; width: 200; height: 48; radius: 24
+        x: 50; y: root.showHorizontalSeek ? 330 : 302; width: 200; height: 48; radius: 24
         color: root.surface
         opacity: platterHover.hovered || miniDockHover.hovered || miniControlsHover.hovered || miniReveal.running || miniPrevious.visualFocus || miniPlay.visualFocus || miniNext.visualFocus || miniRestore.visualFocus ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: root.transitionTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
@@ -941,7 +993,7 @@ ApplicationWindow {
         id: deck
         objectName: "playerDeck"
         visible: !root.miniMode
-        x: 62; y: 533; width: 406; height: 144; radius: SpunStyle.panelRadius
+        x: 62; y: 533; width: 406; height: 144 + (root.showHorizontalSeek ? 28 : 0); radius: SpunStyle.panelRadius
         color: root.surface; border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
         SpunText {
@@ -972,8 +1024,12 @@ ApplicationWindow {
             text: root.time(root.deckPlayer.position); color: root.mutedInk
             font.pixelSize: 13
         }
+        SeekSlider {
+            app: root; objectName: "horizontalSeek"
+            visible: root.showHorizontalSeek; x: 24; y: 72; width: 358; height: 32
+        }
         Row {
-            x: 16; y: 80; spacing: 4
+            x: 16; y: 80 + (root.showHorizontalSeek ? 28 : 0); spacing: 4
             IconButton { objectName: "shuffleButton"; y: 4; selected: root.deckPlayer.shuffle; glyphName: "shuffle"; tip: root.deckPlayer.shuffle ? "Shuffle on" : "Shuffle off"; enabled: !root.useCider || !root.ciderService.controlBusy; ink: root.deckPlayer.shuffle ? root.accent : root.mutedInk; hoverFill: root.hoverFill; onClicked: root.deckPlayer.shuffle = !root.deckPlayer.shuffle }
             IconButton { objectName: "previousButton"; y: 4; glyphName: "previous"; tip: "Previous track · Ctrl+←"; ink: root.ink; hoverFill: root.hoverFill; enabled: root.useCider ? root.ciderService.canPrevious : player.count > 0; onClicked: root.deckPlayer.previous() }
             IconButton {
@@ -995,17 +1051,17 @@ ApplicationWindow {
             }
         }
 
-        IconButton { x: 256; y: 84; glyphName: root.deckPlayer.volume > 0 ? "volume" : "mute"; tip: "Mute · M"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.toggleMute() }
+        IconButton { x: 256; y: 84 + (root.showHorizontalSeek ? 28 : 0); glyphName: root.deckPlayer.volume > 0 ? "volume" : "mute"; tip: "Mute · M"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.toggleMute() }
         SpunSlider {
             id: volumeSlider
             objectName: "volumeSlider"
-            x: 300; y: 86; width: 44; height: 36
+            x: 300; y: 86 + (root.showHorizontalSeek ? 28 : 0); width: 44; height: 36
             from: 0; to: 1; stepSize: .05; value: root.deckPlayer.volume
             onMoved: root.deckPlayer.volume = value
             Accessible.name: "Volume"
         }
 
-        IconButton { id: menuButton; objectName: "menuButton"; x: 350; y: 84; glyphName: "more"; tip: "More actions"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.openSettings() }
+        IconButton { id: menuButton; objectName: "menuButton"; x: 350; y: 84 + (root.showHorizontalSeek ? 28 : 0); glyphName: "more"; tip: "More actions"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.openSettings() }
 
     }
 
@@ -1582,19 +1638,20 @@ ApplicationWindow {
                         width: parent.width; height: 48; spacing: 4
                         Repeater {
                             id: recordChoices
-                            model: ["CD", "Vinyl"]
+                            model: ["CD", "Vinyl", "Cassette"]
                             delegate: AbstractButton {
                                 id: recordChoice
                                 required property string modelData
-                                objectName: modelData === "CD" ? "cdStyleButton" : "vinylStyleButton"
-                                width: (preferenceItems.width - 4) / 2; height: SpunStyle.target
-                                text: modelData; checkable: true; autoExclusive: true; checked: player.vinyl === (modelData === "Vinyl"); hoverEnabled: true
+                                required property int index
+                                objectName: modelData.toLowerCase() + "StyleButton"
+                                width: (preferenceItems.width - 8) / 3; height: SpunStyle.target
+                                text: modelData; checkable: true; autoExclusive: true; checked: player.medium === modelData.toLowerCase(); hoverEnabled: true
                                 Accessible.name: modelData + " appearance"; Accessible.checked: checked
-                                Keys.onLeftPressed: recordChoices.itemAt(0).forceActiveFocus(Qt.TabFocusReason)
-                                Keys.onRightPressed: recordChoices.itemAt(1).forceActiveFocus(Qt.TabFocusReason)
+                                Keys.onLeftPressed: recordChoices.itemAt(Math.max(0,index-1)).forceActiveFocus(Qt.TabFocusReason)
+                                Keys.onRightPressed: recordChoices.itemAt(Math.min(2,index+1)).forceActiveFocus(Qt.TabFocusReason)
                                 Keys.onReturnPressed: clicked()
                                 Keys.onEnterPressed: clicked()
-                                onClicked: player.vinyl = modelData === "Vinyl"
+                                onClicked: player.medium = modelData.toLowerCase()
                                 onActiveFocusChanged: if(activeFocus) preferenceScroll.reveal(this)
                                 background: Rectangle {
                                     radius: 20 * theme.radius; color: "transparent"
@@ -1628,8 +1685,32 @@ ApplicationWindow {
                             Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; name: "down"; ink: root.mutedInk }
                         }
                     }
+                    Column {
+                        width: parent.width; spacing: 4; visible: root.vinyl
+                        SpunText { x: 12; text: "Record speed"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+                        Row {
+                            width: parent.width; spacing: 4
+                            Repeater {
+                                model: ["Relaxed", "33⅓ RPM", "45 RPM"]
+                                SpunButton {
+                                    required property string modelData
+                                    required property int index
+                                    objectName: "vinylSpeed" + index
+                                    width: (preferenceItems.width - 8) / 3; height: 40
+                                    text: modelData; checkable: true; autoExclusive: true; tonal: checked; checked: player.vinylSpeed === [0,33,45][index]
+                                    onClicked: player.vinylSpeed = [0,33,45][index]
+                                    onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
+                                }
+                            }
+                        }
+                    }
+                    PreferenceSwitch { objectName: "horizontalSeekToggle"; app: root; width: parent.width; visible: !root.cassette; height: visible ? implicitHeight : 0; text: "Horizontal progress bar"; glyphName: "minus"; checked: player.horizontalSeek; onToggled: player.horizontalSeek = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                    PreferenceSwitch { objectName: "vinylCrackleToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Vinyl crackle"; glyphName: "volume"; checked: player.vinylCrackle; onToggled: player.vinylCrackle = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                    PreferenceSwitch { objectName: "vinylStaticToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Surface hiss"; glyphName: "volume"; checked: player.vinylStatic; onToggled: player.vinylStatic = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                    PreferenceSwitch { objectName: "vinylSkipsToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Occasional groove skips"; Accessible.description: "Occasionally jumps playback forward by one record revolution"; glyphName: "next"; checked: player.vinylSkips; onToggled: player.vinylSkips = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                     PreferenceSwitch { objectName: "miniPinToggle"; app: root; width: parent.width; text: "Keep Mini on top"; glyphName: "pin"; checked: player.miniOnTop; onToggled: player.miniOnTop = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                     PreferenceSwitch { objectName: "blurToggle"; app: root; width: parent.width; visible: native.supportsBlur; height: visible ? implicitHeight : 0; text: "Blur background"; glyphName: "blur"; checked: player.backgroundBlur; onToggled: player.backgroundBlur = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                    PreferenceSwitch { objectName: "cassetteSoundsToggle"; app: root; width: parent.width; visible: root.cassette; height: visible ? implicitHeight : 0; text: "Cassette sounds"; glyphName: "volume"; checked: player.cassetteSounds; onToggled: player.cassetteSounds = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                     PreferenceSwitch { objectName: "motionToggle"; app: root; width: parent.width; text: "Animations"; glyphName: "motion"; checked: player.motion; onToggled: player.motion = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                     Rectangle { x: 12; width: parent.width - 24; height: 1; color: root.hairline }
                     PreferenceSwitch { objectName: "rememberSessionToggle"; app: root; width: parent.width; text: "Remember Cider session"; glyphName: "queue"; checked: root.listeningService.rememberSession; enabled: !root.listeningService.busy; onToggled: root.listeningService.rememberSession = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }

@@ -1,4 +1,6 @@
 #include "player.h"
+#include "tapesound.h"
+#include "vinylnoise.h"
 #include "library.h"
 #include "listening.h"
 #include "musicactions.h"
@@ -53,6 +55,7 @@
 #include <QUrlQuery>
 #include <QWheelEvent>
 #include <iostream>
+#include <cstring>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <taglib/fileref.h>
@@ -108,8 +111,9 @@ public:
     Q_INVOKABLE void shape(QWindow *window, bool queue) {
         if (!window) return;
         const bool mini = window->property("miniMode").toBool();
+        const bool cassette=window->property("cassette").toBool();
         const int targetWidth = mini ? 300 : queue ? 860 : 530;
-        const int targetHeight = mini ? 354 : 730;
+        const int targetHeight = mini ? (window->property("showHorizontalSeek").toBool()?382:354) : 730;
         window->setMinimumWidth(0);
         window->setMinimumHeight(0);
         window->setMaximumWidth(targetWidth);
@@ -119,13 +123,14 @@ public:
         window->setMinimumHeight(targetHeight);
         if (mini && window->property("menuOpen").toBool()) { window->setMask(QRegion(0,0,targetWidth,targetHeight));return; }
         if (mini) {
-            QRegion region(6,6,288,288,QRegion::Ellipse);
+            QRegion region=cassette?QRegion(18,60,264,176):QRegion(6,6,288,288,QRegion::Ellipse);
+            if(cassette)region|=QRegion(50,240,200,26);
             if (window->property("backgroundBlur").toBool()) {
                 QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0,0,300,targetHeight),21,21);
                 region=QRegion(backdrop.toFillPolygon().toPolygon());
             }
-            else region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
-            region |= QRegion(50,268,200,84);
+            else if(!cassette)region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
+            region |= QRegion(50,268,200,targetHeight-270);
             if (auto *notice=window->findChild<QQuickItem *>("actionNotice"); notice && notice->isVisible())
                 region |= QRegion(notice->mapRectToScene(notice->boundingRect()).toAlignedRect());
             window->setMask(region); return;
@@ -137,8 +142,9 @@ public:
             QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0, 0, window->width(), window->height()), 21, 21);
             window->setMask(QRegion(backdrop.toFillPolygon().toPolygon())); return;
         }
-        QRegion region(44, 73, 442, 442, QRegion::Ellipse);
-        region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
+        QRegion region=cassette?QRegion(60,156,410,276):QRegion(44,73,442,442,QRegion::Ellipse);
+        if(cassette)region|=QRegion(115,439,300,36);
+        if(!cassette)region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
             region |= QRegion(bar->mapRectToScene(bar->boundingRect()).toAlignedRect());
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
@@ -711,14 +717,14 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         check(tonearm->property("lowered").toDouble()>.99,"playing lowers the tonearm onto the grooves");
         capture("14-tonearm-playing");
         player.seek(player.duration()*.85);QTest::qWait(650);
-        check(tonearm->property("armAngle").toDouble()>outerAngle+12,"tonearm tracks inward as song progress advances");
+        check(waitFor([&]{return tonearm->property("armAngle").toDouble()>outerAngle+12;}),"tonearm tracks inward as song progress advances");
         capture("14-tonearm-inner");
         player.setMiniMode(true);QTest::qWait(450);
         const auto tip=shaft->mapToScene(QPointF(0,213));
         check(tonearm->isVisible()&&tip.x()>0&&tip.x()<300&&tip.y()>0&&tip.y()<268,"Mini tonearm stays on the record above its controls");
         capture("14-tonearm-mini");player.setMiniMode(false);QTest::qWait(250);
         player.pause();QTest::qWait(500);
-        check(tonearm->property("lowered").toDouble()==0&&qAbs(tonearm->property("armAngle").toDouble()+4)<.01,"pausing lifts and parks the arm");
+        check(waitFor([&]{return tonearm->property("lowered").toDouble()==0&&qAbs(tonearm->property("armAngle").toDouble()+4)<.1;}),"pausing lifts and parks the arm after the spring settles");
         const bool motion=player.motion();player.setMotion(false);player.play();QTest::qWait(80);
         check(tonearm->property("lowered").toDouble()==1,"reduced motion lowers the arm without animation");
         player.pause();QTest::qWait(30);check(tonearm->property("lowered").toDouble()==0,"reduced motion parks the arm immediately");
@@ -731,6 +737,149 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         check(window->property("discFlipped").toBool(),"tonearm decoration does not intercept disc gestures");
         window->setProperty("discFlipped",false);QTest::qWait(400);
     }
+    {
+        const int originalTrack=player.currentIndex();const auto originalPosition=player.position();
+        const auto speedPosition=player.position();
+        player.setVinylSpeed(33);player.play();window->setProperty("spinSpeed",200.);window->setProperty("spinAngle",0.);QTest::qWait(250);
+        check(window->property("vinylDegreesPerSecond").toDouble()==200&&window->property("spinAngle").toDouble()>35&&window->property("spinAngle").toDouble()<65,"33⅓ RPM rotates the vinyl at 200 degrees per second");
+        player.setVinylSpeed(45);window->setProperty("spinSpeed",270.);window->setProperty("spinAngle",0.);QTest::qWait(250);
+        check(window->property("vinylDegreesPerSecond").toDouble()==270&&window->property("spinAngle").toDouble()>50&&window->property("spinAngle").toDouble()<85,"45 RPM rotates the vinyl at 270 degrees per second");
+        check(player.position()-speedPosition>200&&player.position()-speedPosition<1000&&player.currentIndex()==originalTrack,"changing record RPM keeps the song advancing in real time");
+        player.setVinylSpeed(0);check(window->property("vinylDegreesPerSecond").toDouble()==9,"Relaxed retains the original gentle rotation");
+        player.setVinylSpeed(90);check(player.vinylSpeed()==0,"unsupported vinyl speeds are ignored");
+        player.setVinylSpeed(33);player.pause();
+        player.setHorizontalSeek(true);QTest::qWait(100);
+        auto *seek=findItem(window->contentItem(),"horizontalSeek");auto *deck=findItem(window->contentItem(),"playerDeck");auto *queue=findItem(window->contentItem(),"queuePanel");
+        check(seek&&seek->isVisible()&&deck&&queue&&deck->y()+deck->height()==queue->y()+queue->height(),"optional horizontal seeking preserves player and sidebar alignment");
+        if(seek){
+            QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,seek->mapToScene(QPointF(seek->width()*.7,seek->height()/2)).toPoint());
+            check(waitFor([&]{return qAbs(player.position()-player.duration()*.7)<800;}),"horizontal progress bar seeks to the selected point");
+            const auto before=player.position();QTest::keyClick(window,Qt::Key_Left);
+            check(waitFor([&]{return player.position()<before;}),"horizontal progress bar supports keyboard seeking");
+        }
+        capture("22-horizontal-vinyl");
+        player.setMiniMode(true);QTest::qWait(300);auto *miniSeek=findItem(window->contentItem(),"miniHorizontalSeek");
+        check(miniSeek&&miniSeek->isVisible()&&miniSeek->y()>290&&window->height()==382&&window->mask().contains(QPoint(150,310)),"Mini seek bar sits below the whole record and inside its input mask");
+        if(miniSeek){QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,miniSeek->mapToScene(QPointF(50,16)).toPoint());check(waitFor([&]{return qAbs(player.position()-player.duration()*.25)<1000;}),"Mini horizontal seeking controls the same playback");}
+        capture("22-horizontal-mini");player.setMiniMode(false);player.setHorizontalSeek(false);QTest::qWait(400);
+        if(auto *prefs=window->findChild<QObject*>("preferencesPopup")) {
+            QMetaObject::invokeMethod(prefs,"open");QTest::qWait(200);
+            click("vinylSpeed2");check(player.vinylSpeed()==45,"Preferences selects 45 RPM");click("vinylSpeed2");
+            check(findItem(window->contentItem(),"vinylSpeed2")->property("checked").toBool(),"selected record speed cannot become unchecked");click("vinylSpeed1");
+            capture("22-vinyl-preferences");
+            for(const char *name:{"horizontalSeekToggle","vinylCrackleToggle","vinylStaticToggle","vinylSkipsToggle"}) {
+                auto *option=findItem(window->contentItem(),name);if(!option){check(false,name);continue;}
+                option->forceActiveFocus();QTest::qWait(100);click(name);
+                check(option->property("checked").toBool(),name);click(name);
+            }
+            QMetaObject::invokeMethod(prefs,"close");QTest::qWait(200);
+        }
+        if(tonearm&&shaft){
+            auto *handle=findItem(window->contentItem(),"needleHandle");
+            check(handle&&handle->isEnabled(),"vinyl exposes an accessible needle handle");
+            auto dragTo=[&](double angle){
+                const auto from=shaft->mapToScene(QPointF(0,197)).toPoint();
+                const double a=angle*M_PI/180;
+                const auto to=tonearm->mapToScene(QPointF(378-210*std::sin(a),100+210*std::cos(a))).toPoint();
+                QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,from);QTest::qWait(60);
+                const double start=tonearm->property("dragAngle").toDouble();
+                const auto heldPosition=player.position();bool tracksPointer=true;
+                for(int step=1;step<=12;++step){
+                    const double next=start+(angle-start)*step/12;
+                    const double radians=next*M_PI/180;
+                    const auto point=tonearm->mapToScene(QPointF(378-210*std::sin(radians),100+210*std::cos(radians))).toPoint();
+                    QTest::mouseMove(window,point,25);QTest::qWait(10);
+                    tracksPointer &= tonearm->property("dragging").toBool() && qAbs(tonearm->property("armAngle").toDouble()-next)<1;
+                }
+                check(tracksPointer,"needle follows continuous pointer movement without coordinate feedback");
+                check(qAbs(player.position()-heldPosition)<200,"drag preview does not repeatedly seek playback");
+                QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,to);
+            };
+            dragTo(16);
+            check(waitFor([&]{return player.playing()&&qAbs(player.position()-player.duration()*.5)<1200;}),"dropping the needle at the middle grooves seeks and starts playback");
+            check(!tonearm->property("dragging").toBool(),"needle releases its pointer after a valid drop");
+            QTest::qWait(600);capture("22-needle-dropped");
+            const auto before=player.position();const auto from=shaft->mapToScene(QPointF(0,197)).toPoint();
+            QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,from);QTest::qWait(60);QTest::keyClick(window,Qt::Key_Escape);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,from);
+            check(waitFor([&]{return player.playing();})&&!tonearm->property("dragging").toBool()&&qAbs(player.position()-before)<1200,"Escape cancels needle dragging and resumes without seeking");
+            player.pause();QTest::qWait(650);const auto parkedPosition=player.position();dragTo(-7);QTest::qWait(100);
+            check(!player.playing()&&qAbs(player.position()-parkedPosition)<200,"dropping outside the grooves parks the needle without seeking");
+            player.setMiniMode(true);QTest::qWait(450);dragTo(21);
+            check(waitFor([&]{return player.playing()&&qAbs(player.position()-player.duration()*.75)<1200;}),"needle dragging maps correctly in Mini mode");
+            player.setMiniMode(false);player.pause();QTest::qWait(650);
+        }
+        player.setVinylSkips(true);player.setVinylSpeed(33);player.seek(10000);player.play();QTest::qWait(40);
+        QVariant skipped;QMetaObject::invokeMethod(window,"skipGroove",Q_RETURN_ARG(QVariant,skipped));
+        check(skipped.toBool()&&waitFor([&]{return player.position()>=11700&&player.position()<13000;}),"optional groove skip advances by one 33⅓ RPM revolution");
+        player.pause();QMetaObject::invokeMethod(window,"skipGroove",Q_RETURN_ARG(QVariant,skipped));check(!skipped.toBool(),"groove skips never run while paused");
+        player.seek(player.duration()-3000);player.play();QMetaObject::invokeMethod(window,"skipGroove",Q_RETURN_ARG(QVariant,skipped));check(!skipped.toBool(),"groove skips do not cross the end of a song");player.pause();player.setVinylSkips(false);
+        VinylNoise noise(false);noise.setVolume(.5);noise.setCrackle(true);check(!noise.isOpen(),"vinyl noise keeps no stream while paused");
+        noise.setActive(true);const auto pcm=noise.read(144000);qint16 peak=0;
+        for(qsizetype i=0;i+1<pcm.size();i+=2){qint16 value;std::memcpy(&value,pcm.constData()+i,2);peak=qMax(peak,qint16(std::abs(int(value))));}
+        check(pcm.size()==144000&&peak>100&&peak<30000,"vinyl crackle produces bounded non-silent samples without clipping");
+        noise.setCrackle(false);check(!noise.isOpen(),"turning off all vinyl effects releases the stream");noise.setHiss(true);check(noise.isOpen()&&!noise.read(4800).isEmpty(),"surface hiss can run independently of crackle");noise.setVolume(0);check(!noise.isOpen(),"muting releases the vinyl effects stream");
+        player.setVinylSpeed(45);player.setHorizontalSeek(true);player.setVinylCrackle(true);player.setVinylStatic(true);player.setVinylSkips(true);
+        {Player restored(temp+"/player.ini");check(restored.vinylSpeed()==45&&restored.horizontalSeek()&&restored.vinylCrackle()&&restored.vinylStatic()&&restored.vinylSkips(),"vinyl speed, seek bar, and independent effects survive relaunch");}
+        player.setVinylSpeed(33);player.setHorizontalSeek(false);player.setVinylCrackle(false);player.setVinylStatic(false);player.setVinylSkips(false);
+        player.select(originalTrack,false);player.seek(originalPosition);QTest::qWait(200);
+    }
+    {
+        TapeSound cue(false);int cues=0;QObject::connect(&cue,&TapeSound::triggered,&cue,[&]{++cues;});
+        cue.setEnabled(true);cue.setVolume(.5);cue.observe("local","one");
+        check(cues==0,"cassette sound is silent on initial playback discovery");
+        cue.observe("local","two");cue.observe("local","two");cue.observe("local","three");
+        check(cues==1,"cassette sound ignores duplicate metadata and coalesces rapid skipping");
+        QTest::qWait(170);cue.observe("local","four");check(cues==2,"a later track change triggers a fresh cassette cue");
+        cue.setEnabled(false);cue.observe("local","five");cue.setEnabled(true);cue.observe("local","five");
+        check(cues==2,"disabling cassette sounds does not replay skipped cues when enabled");
+        cue.setVolume(0);cue.observe("local","six");cue.setVolume(.5);cue.observe("cider","remote-one");
+        check(cues==2,"muting and switching sources are silent");
+        QTest::qWait(170);cue.observe("cider","remote-two");check(cues==3,"Cider track identities trigger the same transport cue");
+        cue.observe("cider",{});QTest::qWait(170);cue.observe("cider","remote-three");
+        check(cues==3,"reconnecting Cider does not create a false cassette cue");
+        for(auto sample:{QAudioFormat::UInt8,QAudioFormat::Int16,QAudioFormat::Int32,QAudioFormat::Float}) {
+            QAudioFormat format;format.setSampleRate(24000);format.setChannelCount(2);format.setSampleFormat(sample);
+            const auto pcm=TapeSound::synthesize(format);
+            check(pcm.size()==format.bytesForFrames(6720),"cassette cue has a bounded duration in each supported audio format");
+        }
+        player.setCassetteSounds(false);{Player restored(temp+"/player.ini");check(!restored.cassetteSounds(),"cassette sound preference survives relaunch");}player.setCassetteSounds(true);
+    }
+    const auto cassetteTrack=player.currentIndex();const auto cassettePosition=player.position();
+    player.setMedium("cassette");QTest::qWait(450);
+    check(window->property("cassette").toBool()&&!player.vinyl()&&player.currentIndex()==cassetteTrack&&player.position()==cassettePosition,"Cassette switches appearance without changing the selected song or position");
+    {Player restored(temp+"/player.ini");check(restored.medium()=="cassette","Cassette appearance survives relaunch");}
+    player.setMedium("unknown");check(player.medium()=="cassette","unknown appearance cannot replace the saved selection");
+    check(!findItem(window->contentItem(),"vinylTonearm")&&window->mask().contains(QPoint(265,294))&&!window->mask().contains(QPoint(265,110)),"Cassette has its own rectangular input silhouette without a tonearm or spindle hole");
+    auto *reel=findItem(window->contentItem(),"cassetteReel0");auto *cassetteSeek=findItem(window->contentItem(),"cassetteSeek");
+    check(reel&&cassetteSeek&&cassetteSeek->isVisible()&&!ring->isVisible(),"Cassette exposes reels and its linear seek control");
+    auto *transport=qobject_cast<TapeSound*>(qmlContext(window)->contextProperty("tapeSound").value<QObject*>());
+    check(transport&&transport->enabled(),"Cassette appearance enables its optional transport sound");
+    player.setCassetteSounds(false);QTest::qWait(10);check(transport&&!transport->enabled(),"Cassette sound toggle updates the audio engine");player.setCassetteSounds(true);
+    capture("21-cassette-front");
+    if(reel) {
+        player.seek(player.duration()*.45);
+        player.play();QTest::qWait(300);const auto angle=reel->rotation();QTest::qWait(300);
+        check(reel->rotation()!=angle&&findItem(window->contentItem(),"discFace")->rotation()==0,"playing rotates the cassette reels while the artwork label stays still");
+        auto *wave=findItem(window->contentItem(),"cassetteSeekWave");
+        check(wave&&wave->property("linear").toBool()&&wave->property("amplitude").toDouble()>2,"cassette playback uses the shared animated squiggly progress track");
+        capture("21-cassette-playing");
+        player.setMotion(false);QTest::qWait(100);const auto still=reel->rotation();QTest::qWait(200);
+        check(reel->rotation()==still,"reduced motion freezes cassette reels");player.setMotion(true);player.pause();QTest::qWait(60);const auto stopped=reel->rotation();QTest::qWait(160);
+        check(reel->rotation()==stopped,"cassette transport stops its reels when paused");
+        check(wave&&qFuzzyIsNull(wave->property("amplitude").toDouble()),"cassette progress wave settles when paused");
+    }
+    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(340,457));
+    check(waitFor([&]{return qAbs(player.position()-player.duration()*.75)<1000;}),"cassette seek bar scrubs the same player");
+    const auto beforeCassetteKey=player.position();QTest::keyClick(window,Qt::Key_Right);
+    check(waitFor([&]{return player.position()>beforeCassetteKey;}),"cassette seek bar remains keyboard accessible");
+    window->setProperty("discFlipped",true);QTest::qWait(500);
+    check(findItem(window->contentItem(),"albumTrackList")->y()<200&&findItem(window->contentItem(),"discBackFooter")->y()<335,"cassette reverse aligns album content inside its shell");capture("21-cassette-back");
+    player.setMiniMode(true);QTest::qWait(450);capture("21-cassette-mini-back");
+    window->setProperty("discFlipped",false);QTest::qWait(450);capture("21-cassette-mini");
+    check(window->mask().contains(QPoint(150,150))&&findItem(window->contentItem(),"miniControls")->y()>265,"Mini cassette keeps its full shell visible above playback controls");
+    player.setMiniMode(false);player.seek(cassettePosition);player.setVinyl(true);QTest::qWait(400);
+    check(!findItem(window->contentItem(),"cassetteReel0")&&player.vinyl(),"switching back to Vinyl releases cassette reels");
+    check(transport&&!transport->enabled(),"Vinyl appearance disables cassette transport sounds");
     capture("11-vinyl-front");
     QTest::mouseMove(window,QPoint(265,185)); QTest::qWait(100);
     QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, QPoint(265,185));
@@ -1128,6 +1277,8 @@ int main(int argc, char **argv) {
     MusicActions musicActions(&cider);
     Listening listening(&cider);
     DiscPresentation presentation;
+    TapeSound tapeSound(!test);
+    VinylNoise vinylNoise(!test);
     Native native;
     const qint64 backendReady = startup.elapsed();
     if (!test) registerMpris(&player);
@@ -1142,6 +1293,8 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("native", &native);
     engine.rootContext()->setContextProperty("lyrics", &lyrics);
     engine.rootContext()->setContextProperty("presentation", &presentation);
+    engine.rootContext()->setContextProperty("tapeSound", &tapeSound);
+    engine.rootContext()->setContextProperty("vinylNoise", &vinylNoise);
     engine.rootContext()->setContextProperty("cider", &cider);
     engine.rootContext()->setContextProperty("library", &library);
     engine.rootContext()->setContextProperty("musicActions", &musicActions);

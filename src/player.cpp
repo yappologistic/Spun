@@ -37,7 +37,15 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_shuffle = m_settings.value("shuffle", false).toBool();
     m_repeat = qBound(0, m_settings.value("repeat", 0).toInt(), 2);
     m_light = m_settings.value("light", false).toBool();
-    m_vinyl = m_settings.value("vinyl", false).toBool();
+    m_medium=m_settings.value("medium",m_settings.value("vinyl",false).toBool()?"vinyl":"cd").toString();
+    if(!QStringList{"cd","vinyl","cassette"}.contains(m_medium))m_medium="cd";
+    m_vinylSpeed=m_settings.value("vinylSpeed",33).toInt();
+    if(m_vinylSpeed!=0&&m_vinylSpeed!=33&&m_vinylSpeed!=45)m_vinylSpeed=33;
+    m_horizontalSeek=m_settings.value("horizontalSeek",false).toBool();
+    m_vinylCrackle=m_settings.value("vinylCrackle",false).toBool();
+    m_vinylStatic=m_settings.value("vinylStatic",false).toBool();
+    m_vinylSkips=m_settings.value("vinylSkips",false).toBool();
+    m_cassetteSounds = m_settings.value("cassetteSounds", true).toBool();
     m_motion = m_settings.value("motion", true).toBool();
     m_ciderAutoStart = m_settings.value("ciderAutoStart", false).toBool();
     m_miniOnTop = m_settings.value("miniOnTop", false).toBool();
@@ -360,7 +368,17 @@ void Player::move(int from, int to) {
 void Player::setMiniOnTop(bool value) { if (m_miniOnTop == value) return; m_miniOnTop = value; emit miniOnTopChanged(); save(); }
 void Player::setMiniMode(bool value) { if (m_miniMode == value) return; m_miniMode = value; emit miniModeChanged(); save(); }
 void Player::setBackgroundBlur(bool value) { if (m_backgroundBlur == value) return; m_backgroundBlur = value; emit backgroundBlurChanged(); save(); }
-void Player::setVinyl(bool value) { if (m_vinyl==value) return; m_vinyl=value; emit vinylChanged(); save(); }
+void Player::setVinyl(bool value) { setMedium(value?"vinyl":"cd"); }
+void Player::setMedium(const QString &value) {
+    if(m_medium==value || !QStringList{"cd","vinyl","cassette"}.contains(value))return;
+    const bool wasVinyl=vinyl();m_medium=value;emit mediumChanged();if(wasVinyl!=vinyl())emit vinylChanged();save();
+}
+void Player::setVinylSpeed(int value) { if((value!=0&&value!=33&&value!=45)||value==m_vinylSpeed)return;m_vinylSpeed=value;emit settingsChanged();save(); }
+void Player::setHorizontalSeek(bool value) { if(value==m_horizontalSeek)return;m_horizontalSeek=value;emit settingsChanged();save(); }
+void Player::setVinylCrackle(bool value) { if(value==m_vinylCrackle)return;m_vinylCrackle=value;emit settingsChanged();save(); }
+void Player::setVinylStatic(bool value) { if(value==m_vinylStatic)return;m_vinylStatic=value;emit settingsChanged();save(); }
+void Player::setVinylSkips(bool value) { if(value==m_vinylSkips)return;m_vinylSkips=value;emit settingsChanged();save(); }
+void Player::setCassetteSounds(bool enabled) { if(m_cassetteSounds==enabled)return;m_cassetteSounds=enabled;emit settingsChanged();save(); }
 void Player::setMotion(bool value) { m_motion = value; emit settingsChanged(); save(); }
 void Player::fail(const QString &message) { m_error = message; emit errorChanged(); }
 void Player::dismissError() { m_error.clear(); emit errorChanged(); }
@@ -369,8 +387,15 @@ void Player::save() {
     m_settings.setValue("shuffle", m_shuffle);
     m_settings.setValue("repeat", m_repeat);
     m_settings.setValue("light", m_light);
-    m_settings.setValue("vinyl", m_vinyl);
+    m_settings.setValue("vinyl", vinyl());
+    m_settings.setValue("medium", m_medium);
     m_settings.setValue("motion", m_motion);
+    m_settings.setValue("cassetteSounds", m_cassetteSounds);
+    m_settings.setValue("vinylSpeed",m_vinylSpeed);
+    m_settings.setValue("horizontalSeek",m_horizontalSeek);
+    m_settings.setValue("vinylCrackle",m_vinylCrackle);
+    m_settings.setValue("vinylStatic",m_vinylStatic);
+    m_settings.setValue("vinylSkips",m_vinylSkips);
     m_settings.setValue("backgroundBlur", m_backgroundBlur);
     m_settings.setValue("miniMode", m_miniMode);
     m_settings.setValue("miniOnTop", m_miniOnTop);
