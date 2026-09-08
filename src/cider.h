@@ -1,4 +1,5 @@
 #pragma once
+#include "ciderevents.h"
 #include <QObject>
 #include <QVariantMap>
 #include <QImage>
@@ -14,10 +15,21 @@
 #include <QFutureWatcher>
 
 class Cider : public QObject {
+    friend class Listening;
     friend class Lyrics;
     friend class Library;
     friend class MusicActions;
     Q_OBJECT
+    Q_PROPERTY(QString audioQuality READ audioQuality NOTIFY audioQualityChanged)
+    Q_PROPERTY(bool qualityBusy READ qualityBusy NOTIFY audioQualityChanged)
+    Q_PROPERTY(bool canUndoQueue READ canUndoQueue NOTIFY queueStatusChanged)
+    Q_PROPERTY(bool authorizing READ authorizing NOTIFY connectionChanged)
+    Q_PROPERTY(QString connectionMessage READ connectionMessage NOTIFY connectionChanged)
+    Q_PROPERTY(QString connectionState READ connectionState NOTIFY connectionChanged)
+    Q_PROPERTY(bool recovering READ recovering NOTIFY connectionChanged)
+    Q_PROPERTY(bool liveVisible READ liveVisible WRITE setLiveVisible NOTIFY liveChanged)
+    Q_PROPERTY(bool liveConnected READ liveConnected NOTIFY liveChanged)
+    Q_PROPERTY(bool libraryVisible READ libraryVisible WRITE setLibraryVisible NOTIFY connectionChanged)
     Q_PROPERTY(bool available READ available NOTIFY trackChanged)
     Q_PROPERTY(QString title READ title NOTIFY trackChanged)
     Q_PROPERTY(QString artist READ artist NOTIFY trackChanged)
@@ -41,6 +53,9 @@ class Cider : public QObject {
     Q_PROPERTY(qint64 position READ position NOTIFY positionChanged)
     Q_PROPERTY(qint64 duration READ duration NOTIFY trackChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
+    Q_PROPERTY(QVariantMap audioOptions READ audioOptions NOTIFY audioOptionsChanged)
+    Q_PROPERTY(bool audioBusy READ audioBusy NOTIFY audioOptionsChanged)
+    Q_PROPERTY(QString audioError READ audioError NOTIFY audioOptionsChanged)
     Q_PROPERTY(bool crossfade READ crossfade NOTIFY crossfadeChanged)
     Q_PROPERTY(double crossfadeSeconds READ crossfadeSeconds NOTIFY crossfadeChanged)
     Q_PROPERTY(bool crossfadeReady READ crossfadeReady NOTIFY crossfadeChanged)
@@ -59,6 +74,24 @@ class Cider : public QObject {
     Q_PROPERTY(bool canPrevious READ canPrevious NOTIFY trackChanged)
 public:
     explicit Cider(bool enabled = true, const QString &connectionPath = {}, const QUrl &rpcBase = QUrl("http://localhost:10767"), QObject *parent = nullptr);
+    QString audioQuality() const { return m_audioQuality; }
+    bool qualityBusy() const { return m_qualityBusy; }
+    Q_INVOKABLE void refreshAudioQuality();
+    bool canUndoQueue() const { return !m_undoTrack.isEmpty() && m_undoRevision==m_queueRevision && m_undoClock.isValid() && m_undoClock.elapsed()<8000; }
+    Q_INVOKABLE void undoQueueRemoval();
+    Q_INVOKABLE void insertQueue(const QVariantList &items, int index, int revision);
+    bool authorizing() const { return !m_authReply.isNull(); }
+    QString connectionMessage() const { return m_connectionMessage; }
+    QString connectionState() const { return m_connectionState; }
+    bool recovering() const { return m_connectionState=="offline" || m_connectionState=="timeout"; }
+    bool libraryVisible() const { return m_libraryVisible; }
+    bool liveVisible() const { return m_liveVisible; }
+    bool liveConnected() const { return m_events.connected(); }
+    void setLiveVisible(bool visible);
+    void setLibraryVisible(bool visible);
+    Q_INVOKABLE void authorize();
+    Q_INVOKABLE void cancelAuthorization();
+    Q_INVOKABLE void reconnect();
     bool available() const { return m_available; }
     ~Cider() override;
     QString title() const { return m_title.isEmpty() ? "Cider" : m_title; }
@@ -89,6 +122,12 @@ public:
     qint64 position() const;
     qint64 duration() const { return m_duration; }
     double volume() const { return m_volume; }
+    QVariantMap audioOptions() const { return m_audioOptions; }
+    bool audioBusy() const { return m_audioBusy; }
+    QString audioError() const { return m_audioError; }
+    Q_INVOKABLE void refreshAudioOptions();
+    Q_INVOKABLE void setAudioOption(const QString &key, const QVariant &value);
+    Q_INVOKABLE void copySongLink();
     bool crossfade() const { return m_crossfade; }
     double crossfadeSeconds() const { return m_crossfadeSeconds; }
     bool crossfadeReady() const { return m_crossfadeReady; }
@@ -99,13 +138,16 @@ public:
     Q_INVOKABLE void setCrossfadeSeconds(double value);
     bool autoplay() const { return m_autoplay; }
     bool modesReady() const { return m_modesReady; }
-    bool controlBusy() const { return m_controlBusy || m_modesReading; }
+    bool controlBusy() const { return m_controlBusy || m_modesReading || m_listeningBusy; }
     int queueRevision() const { return m_queueRevision; }
     bool launching() const { return m_launchTimer.isActive(); }
     Q_INVOKABLE void refreshModes();
     Q_INVOKABLE void setAutoplay(bool value);
     Q_INVOKABLE void moveQueue(int from, int to, int revision);
     Q_INVOKABLE void removeQueue(int index, int revision);
+    Q_INVOKABLE QVariantMap previewCleanup(const QString &mode) const;
+    Q_INVOKABLE void editQueueSelection(const QVariantList &indices, const QString &operation, int revision);
+    Q_INVOKABLE void cleanQueue(const QString &mode, int revision);
     Q_INVOKABLE void ensureRunning();
     static QStringList launchCommand();
     bool shuffle() const { return m_shuffle; }
@@ -127,7 +169,13 @@ public:
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void dismissError();
 signals:
+    void liveChanged();
+    void remoteSettingsChanged();
+    void audioQualityChanged();
+    void connectionChanged();
+    void connectionRestored();
     void crossfadeChanged();
+    void audioOptionsChanged();
     void apiFeedback(const QString &message, bool error);
     void controlChanged();
     void launchChanged();
@@ -146,12 +194,40 @@ private slots:
     void propertiesChanged(const QString &interface, const QVariantMap &values, const QStringList &invalidated);
     void seeked(qlonglong microseconds);
 private:
+    void updateEvents();
+    bool m_listeningBusy=false;
+    bool m_liveVisible=false, m_eventQueue=false, m_eventSettings=false;
+    CiderEvents m_events;
+    QTimer m_eventCoalesce;
+    QString m_audioQuality;
+    bool m_qualityBusy=false;
+    QVariantMap m_undoTrack;
+    int m_undoIndex=-1, m_undoRevision=-1;
+    QElapsedTimer m_undoClock;
+    QVariantList m_insertItems;
+    QStringList m_insertExpected;
+    int m_insertAt=0, m_insertDone=0, m_insertPosition=-1;
+    bool m_restoringQueue=false;
+    void insertNext();
+    void verifyInsert(const QStringList &before,int beforePosition,std::function<void()> done,int attempts=24);
+    void finishInsert(bool success);
+    void observeConnection(int status, QNetworkReply::NetworkError error);
+    void scheduleRecovery();
+    bool saveToken();
+    bool m_libraryVisible=false;
+    int m_recoveryDelay=3000, m_tokenGeneration=0;
+    QString m_connectionState, m_connectionMessage;
+    QTimer m_recoveryTimer;
+    QPointer<QNetworkReply> m_authReply, m_probeReply;
     void requestDiscJson(const QString &path, const QJsonObject &body, int generation, std::function<void(QJsonObject)> done);
     void requestDiscTracks(const QString &path, int generation);
     void failDisc(const QString &message);
-    void apiRequest(const QByteArray &method, const QString &endpoint, const QJsonObject &body, std::function<void(bool,QJsonObject)> done);
+    void apiRequest(const QByteArray &method, const QString &endpoint, const QJsonObject &body, std::function<void(bool,QJsonObject)> done, bool reportError=true);
     bool applyCrossfade(const QJsonObject &json);
     void changeCrossfade(const QJsonObject &patch);
+    QVariantMap m_audioOptions;
+    QString m_audioError;
+    bool m_audioBusy=false, m_linkBusy=false;
     bool m_crossfade=false, m_crossfadeReady=false, m_crossfadeBusy=false;
     double m_crossfadeSeconds=5;
     QString m_crossfadeError;
@@ -159,6 +235,16 @@ private:
     bool applyModes(const QJsonObject &json);
     void fetchQueue();
     void editQueue(int from, int to, int revision, bool remove);
+    void batchNext();
+    void finishBatch(bool success);
+    QList<QPair<int,int>> m_batchOps;
+    QStringList m_batchExpected;
+    int m_batchDone=0, m_batchPosition=-1, m_batchGeneration=0;
+    void cleanupNext();
+    void finishCleanup(bool success);
+    QList<int> m_cleanupIndices;
+    QStringList m_cleanupExpected;
+    int m_cleanupDone=0, m_cleanupPosition=-1, m_cleanupGeneration=0;
     void requestQueuePage(int offset);
     void queueFailed(const QString &message, bool needsToken = false);
     void apply(const QVariantMap &values);

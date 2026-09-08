@@ -5,6 +5,7 @@ AbstractButton {
     id: control
     property string glyphName: "play"
     property string tip: ""
+    property bool showTip: true
     property color ink: "#eee8de"
     property color fill: "transparent"
     property color hoverFill: "#30ffffff"
@@ -16,7 +17,7 @@ AbstractButton {
     focusPolicy: Qt.StrongFocus
     hoverEnabled: true
     Accessible.name: tip
-    SpunToolTip { visible: control.hovered && control.enabled && control.visible && !control.down && control.tip.length > 0; text: control.tip }
+    SpunToolTip { visible: control.showTip && (control.hovered || control.visualFocus) && control.enabled && control.visible && !control.down && control.tip.length > 0; text: control.tip }
     background: Rectangle {
         SpunSpring { id: cornerMotion; targetValue: Math.min(control.width, control.height) * (control.down ? .35 : .5) }
         radius: cornerMotion.value
@@ -24,7 +25,7 @@ AbstractButton {
         Rectangle {
             anchors.fill: parent; radius: parent.radius; color: SpunStyle.selected
             opacity: control.selected && control.fill.a === 0 ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback } }
+            Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         }
         SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: control.ink; enabled: control.enabled; pressed: control.down; focused: control.visualFocus; hovered: control.hovered }
         border.width: control.visualFocus ? 2 : 0
@@ -33,7 +34,7 @@ AbstractButton {
     contentItem: Item {
         SpunSpring { id: pressMotion; targetValue: control.down && control.motionEnabled ? .95 : 1; epsilon: .002 }
         scale: pressMotion.value
-        Glyph { anchors.centerIn: parent; width: control.glyphSize; height: width; name: control.glyphName; ink: control.ink; opacity: control.enabled ? 1 : 0.3 }
+        Glyph { anchors.centerIn: parent; width: control.glyphSize; height: width; name: control.glyphName; ink: control.ink; opacity: control.enabled ? 1 : SpunStyle.disabledOpacity }
     }
 
 }

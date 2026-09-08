@@ -37,6 +37,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_shuffle = m_settings.value("shuffle", false).toBool();
     m_repeat = qBound(0, m_settings.value("repeat", 0).toInt(), 2);
     m_light = m_settings.value("light", false).toBool();
+    m_vinyl = m_settings.value("vinyl", false).toBool();
     m_motion = m_settings.value("motion", true).toBool();
     m_ciderAutoStart = m_settings.value("ciderAutoStart", false).toBool();
     m_miniOnTop = m_settings.value("miniOnTop", false).toBool();
@@ -115,7 +116,7 @@ QString Player::trackId() const {
 }
 QVariantList Player::queue() const {
     QVariantList result;
-    for (const auto &t : m_tracks) result.append(QVariantMap{{"title", t.title}, {"artist", t.artist.isEmpty() ? "Unknown artist" : t.artist}, {"duration", t.duration}, {"artwork", queueArtworkUrl(t.path, t.cover)}});
+    for (const auto &t : m_tracks) result.append(QVariantMap{{"path", t.path}, {"title", t.title}, {"artist", t.artist.isEmpty() ? "Unknown artist" : t.artist}, {"duration", t.duration}, {"artwork", queueArtworkUrl(t.path, t.cover)}});
     return result;
 }
 bool Player::supported(const QString &path) {
@@ -359,6 +360,7 @@ void Player::move(int from, int to) {
 void Player::setMiniOnTop(bool value) { if (m_miniOnTop == value) return; m_miniOnTop = value; emit miniOnTopChanged(); save(); }
 void Player::setMiniMode(bool value) { if (m_miniMode == value) return; m_miniMode = value; emit miniModeChanged(); save(); }
 void Player::setBackgroundBlur(bool value) { if (m_backgroundBlur == value) return; m_backgroundBlur = value; emit backgroundBlurChanged(); save(); }
+void Player::setVinyl(bool value) { if (m_vinyl==value) return; m_vinyl=value; emit vinylChanged(); save(); }
 void Player::setMotion(bool value) { m_motion = value; emit settingsChanged(); save(); }
 void Player::fail(const QString &message) { m_error = message; emit errorChanged(); }
 void Player::dismissError() { m_error.clear(); emit errorChanged(); }
@@ -367,6 +369,7 @@ void Player::save() {
     m_settings.setValue("shuffle", m_shuffle);
     m_settings.setValue("repeat", m_repeat);
     m_settings.setValue("light", m_light);
+    m_settings.setValue("vinyl", m_vinyl);
     m_settings.setValue("motion", m_motion);
     m_settings.setValue("backgroundBlur", m_backgroundBlur);
     m_settings.setValue("miniMode", m_miniMode);

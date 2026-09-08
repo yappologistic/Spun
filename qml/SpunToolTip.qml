@@ -36,6 +36,6 @@ ToolTip {
         radius: SpunStyle.rowRadius
         border.width: 0
     }
-    enter: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.standardCurve } }
-    exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit } }
+    enter: Transition { NumberAnimation { property: "opacity"; from: 0; to: 1; duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+    exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
 }

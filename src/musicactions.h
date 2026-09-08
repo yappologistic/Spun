@@ -1,6 +1,7 @@
 #pragma once
 #include <QObject>
 #include <QVariantMap>
+#include <QVariantList>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -16,27 +17,35 @@ class MusicActions : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     Q_PROPERTY(bool favorite READ favorite NOTIFY changed)
+    Q_PROPERTY(bool disliked READ disliked NOTIFY changed)
     Q_PROPERTY(bool saved READ saved NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
 public:
     explicit MusicActions(Cider *cider, QObject *parent=nullptr);
     ~MusicActions() override;
     bool observing() const { return m_observing; }
-    bool busy() const { return m_busy; }
+    bool busy() const { return m_busy || !m_batch.isEmpty(); }
     bool ready() const { return m_ready; }
     bool favorite() const { return m_favorite; }
+    bool disliked() const { return m_disliked; }
     bool saved() const { return m_saved; }
     QString error() const { return m_error; }
     void setObserving(bool value);
     Q_INVOKABLE void refresh();
+    Q_INVOKABLE void enqueueMany(const QVariantList &items, bool next);
     Q_INVOKABLE void enqueue(const QVariantMap &item, bool next);
     Q_INVOKABLE void toggleFavorite();
     Q_INVOKABLE void save();
+    Q_INVOKABLE void toggleDislike();
 signals:
     void changed();
     void currentChanged();
     void feedback(const QString &message, bool error);
 private:
+    void enqueueBatchItem();
+    QVariantList m_batch;
+    int m_batchDone=0;
+    bool m_batchNext=false;
     void request(const QByteArray &method, const QString &path, const QJsonObject &body,
                  bool mutation, std::function<void(QJsonObject)> done);
     void changeCurrent(const QByteArray &method, const QString &path, const QJsonObject &body, const QString &message);
@@ -46,6 +55,6 @@ private:
     QPointer<QNetworkReply> m_read, m_write;
     QTimer m_poll;
     int m_generation=0;
-    bool m_observing=false, m_busy=false, m_ready=false, m_favorite=false, m_saved=false;
+    bool m_observing=false, m_busy=false, m_ready=false, m_favorite=false, m_disliked=false, m_saved=false;
     QString m_error;
 };

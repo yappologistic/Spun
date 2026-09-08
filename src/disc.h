@@ -5,12 +5,15 @@
 
 class Disc : public QQuickPaintedItem {
     Q_OBJECT
+    Q_PROPERTY(bool vinyl READ vinyl WRITE setVinyl NOTIFY vinylChanged)
     Q_PROPERTY(QImage artwork READ artwork WRITE setArtwork NOTIFY artworkChanged)
     Q_PROPERTY(QColor labelColor READ labelColor WRITE setLabelColor NOTIFY labelColorChanged)
     Q_PROPERTY(bool overlay READ overlay WRITE setOverlay NOTIFY overlayChanged)
 public:
     explicit Disc(QQuickItem *parent = nullptr);
     void paint(QPainter *painter) override;
+    bool vinyl() const { return m_vinyl; }
+    void setVinyl(bool value) { if(m_vinyl==value)return; m_vinyl=value; update(); emit vinylChanged(); }
     QImage artwork() const { return m_art; }
     void setArtwork(const QImage &image);
     bool overlay() const { return m_overlay; }
@@ -19,13 +22,15 @@ public:
     void setLabelColor(const QColor &value) { if (m_labelColor==value) return; m_labelColor=value; update(); emit labelColorChanged(); }
     static QImage fallbackArt(int size = 1000);
 signals:
+    void vinylChanged();
     void artworkChanged();
     void overlayChanged();
     void labelColorChanged();
 private:
     QImage m_art, m_fallback;
     QColor m_labelColor;
-    bool m_overlay = false;
+    bool m_overlay = false, m_vinyl = false;
+    void paintVinyl(QPainter *painter);
 };
 
 class ProgressRing : public QQuickItem {

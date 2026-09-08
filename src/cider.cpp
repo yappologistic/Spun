@@ -1,4 +1,7 @@
 #include "cider.h"
+#include "library.h"
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QDBusArgument>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -23,6 +26,7 @@
 #include <QImageReader>
 #include <QtConcurrent>
 #include <utility>
+#include <algorithm>
 
 static const QString service = QStringLiteral("org.mpris.MediaPlayer2.cider");
 static const QString path = QStringLiteral("/org/mpris/MediaPlayer2");
@@ -42,8 +46,27 @@ Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, Q
         m_apiToken = QJsonDocument::fromJson(connection.readAll()).object().value("token").toString();
     m_launchTimer.setSingleShot(true); m_launchTimer.setInterval(20000);
     connect(&m_launchTimer,&QTimer::timeout,this,[this] { emit launchChanged(); emit apiFeedback("Cider is taking longer to connect. Check its window and local API.",true); });
+    m_recoveryTimer.setSingleShot(true);
+    connect(&m_recoveryTimer,&QTimer::timeout,this,&Cider::reconnect);
     m_queuePoll.setInterval(10000);
     connect(&m_queuePoll, &QTimer::timeout, this, &Cider::refreshQueue);
+    m_eventCoalesce.setSingleShot(true);m_eventCoalesce.setInterval(180);
+    connect(&m_events,&CiderEvents::connectedChanged,this,[this] {
+        m_queuePoll.setInterval(m_events.connected()?30000:10000);
+        if(m_events.connected() && (m_queueVisible || m_libraryVisible))refreshQueue();
+        emit liveChanged();
+    });
+    connect(&m_events,&CiderEvents::event,this,[this](const QString &type) {
+        if(type=="queueStatus.queueChanged" || type=="playbackStatus.nowPlayingItemDidChange")m_eventQueue=true;
+        else if(type.startsWith("audioStatus.") || type=="playbackStatus.nowPlayingStatusDidChange" || type=="queueStatus.smartQueueChanged")m_eventSettings=true;
+        else return;
+        if(!m_eventCoalesce.isActive())m_eventCoalesce.start();
+    });
+    connect(&m_eventCoalesce,&QTimer::timeout,this,[this] {
+        const bool queue=std::exchange(m_eventQueue,false),settings=std::exchange(m_eventSettings,false);
+        if(queue && (m_queueVisible || m_libraryVisible))refreshQueue();
+        if(settings)emit remoteSettingsChanged();
+    });
     m_commandClock.start();
     m_commands.setInterval(50);
     connect(&m_commands, &QTimer::timeout, this, &Cider::flushCommands);
@@ -68,7 +91,7 @@ Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, Q
     m_poll.start();
     refresh();
 }
-Cider::~Cider() { if (m_artDecodeActive) m_artLoader.waitForFinished(); }
+Cider::~Cider() { m_events.configure(false,m_rpcBase,{}); if (m_artDecodeActive) m_artLoader.waitForFinished(); }
 qint64 Cider::position() const {
     return qBound<qint64>(0, m_position + (m_playing && m_clock.isValid() ? m_clock.elapsed() : 0), m_duration);
 }
@@ -124,7 +147,7 @@ void Cider::apply(const QVariantMap &v) {
     if (v.contains("CanSeek")) m_canSeek = unwrap(v.value("CanSeek")).toBool();
     if (v.contains("CanGoNext")) m_canNext = unwrap(v.value("CanGoNext")).toBool();
     if (v.contains("CanGoPrevious")) m_canPrevious = unwrap(v.value("CanGoPrevious")).toBool();
-    if (metadataChanged) { emit trackChanged(); if (m_queueVisible) refreshQueue(); if (m_discVisible) refreshDisc(); }
+    if (metadataChanged) { emit trackChanged(); if (m_queueVisible || m_libraryVisible) refreshQueue(); if (m_discVisible) refreshDisc(); }
 }
 void Cider::propertiesChanged(const QString &interface, const QVariantMap &values, const QStringList &invalidated) {
     if (interface == iface) { apply(values); if (!invalidated.isEmpty()) refresh(); }
@@ -252,18 +275,122 @@ void Cider::setQueueVisible(bool visible) {
     if (m_queueVisible == visible) return;
     m_queueVisible = visible;
     if (visible) { refreshQueue(); m_queuePoll.start(); }
-    else m_queuePoll.stop();
+    else if(!m_libraryVisible)m_queuePoll.stop();
+    scheduleRecovery();
     emit queueStatusChanged();
 }
+bool Cider::saveToken() {
+    if (m_connectionPath.isEmpty()) return true;
+    const auto bytes=QJsonDocument(QJsonObject{{"token",m_apiToken}}).toJson(QJsonDocument::Compact);
+    QFile previous(m_connectionPath);
+    if (previous.open(QIODevice::ReadOnly) && previous.readAll()==bytes) return true;
+    QDir().mkpath(QFileInfo(m_connectionPath).absolutePath());
+    QSaveFile file(m_connectionPath);
+    if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner) ||
+        file.write(bytes)!=bytes.size() || !file.commit()) {
+        emit apiFeedback("Connected for this session. Couldn’t save Cider access.",true); return false;
+    }
+    return true;
+}
 void Cider::connectQueue(const QString &token) {
-    if (m_queueBusy) return;
-    m_apiToken = token.trimmed();
-    m_needsToken = false; m_queueError.clear();
+    const auto value=token.trimmed();
+    if (value.isEmpty() || value.size()>8192 || value.contains('\n') || value.contains('\r')) return;
+    ++m_tokenGeneration; m_queueBusy=false;
+    if(!m_batchOps.isEmpty()) { m_afterQueue={};finishBatch(false); }
+    if(!m_cleanupIndices.isEmpty()) { m_afterQueue={};finishCleanup(false); }
+    m_apiToken=value; m_needsToken=false; m_queueError.clear();updateEvents();
+    m_recoveryTimer.stop(); m_connectionState.clear(); m_connectionMessage.clear(); emit connectionChanged();
+    if(m_queueVisible || m_libraryVisible)m_queuePoll.start();
     refreshQueue();
+}
+void Cider::authorize() {
+    if (m_authReply) return;
+    auto url=m_rpcBase; url.setPath("/api/v2/auth/request"); url.setQuery(QString());
+    QNetworkRequest req(url); req.setTransferTimeout(120000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
+    req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
+    // Bootstrap is unauthenticated; an expired token must not block approval.
+    const QJsonObject body{{"app_name","Spun"},{"scopes",QJsonArray{"playback","queue","library","audio"}}};
+    auto *reply=m_rpcNetwork.post(req,QJsonDocument(body).toJson(QJsonDocument::Compact));
+    m_authReply=reply; m_connectionMessage="Approve Spun in Cider."; emit connectionChanged();
+    connect(reply,&QNetworkReply::readyRead,reply,[reply] { if(reply->bytesAvailable()>65536)reply->abort(); });
+    connect(reply,&QNetworkReply::finished,this,[this,reply] {
+        reply->deleteLater(); if (m_authReply!=reply) return; m_authReply=nullptr;
+        const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto object=QJsonDocument::fromJson(reply->readAll()).object();
+        const auto data=object.value("data").isObject()?object.value("data").toObject():object;
+        const auto token=data.value("token").toString().trimmed();
+        if (reply->error()==QNetworkReply::NoError && status>=200 && status<300 && !token.isEmpty() && token.size()<=8192 && !token.contains('\n') && !token.contains('\r')) {
+            connectQueue(token); saveToken(); emit connectionRestored();
+            m_connectionMessage="Connected to Cider.";
+        } else {
+            if (status==404 || status==405) m_connectionMessage="This Cider version needs a manual app token.";
+            else if (status==401 || status==403) m_connectionMessage="Access wasn’t approved. Try again when you’re ready.";
+            else if (status==408) m_connectionMessage="Approval timed out. Try again when Cider is ready.";
+            else if (status==409) m_connectionMessage="Cider already has an approval prompt open. Finish or dismiss it first.";
+            else if (status==429) m_connectionMessage="Too many requests. Wait a moment, then try again.";
+            else if (!status) m_connectionMessage="Couldn’t connect. Open Cider and enable its local API, then try again.";
+            else m_connectionMessage="Cider didn’t return an access token. Try again or use a manual token.";
+        }
+        emit connectionChanged();
+    });
+}
+void Cider::cancelAuthorization() {
+    if (!m_authReply) return;
+    auto reply=m_authReply; m_authReply=nullptr; reply->abort();
+    m_connectionMessage="Request cancelled. Dismiss any open approval prompt in Cider."; emit connectionChanged();
+}
+void Cider::setLibraryVisible(bool visible) {
+    if(m_libraryVisible==visible)return;
+    m_libraryVisible=visible;
+    if(visible && !m_apiToken.isEmpty()) { refreshQueue();m_queuePoll.start(); }
+    else if(!m_queueVisible)m_queuePoll.stop();
+    scheduleRecovery(); emit connectionChanged();
+}
+void Cider::scheduleRecovery() {
+    if (!recovering() || (!m_libraryVisible && !m_queueVisible)) { m_recoveryTimer.stop(); return; }
+    if (!m_recoveryTimer.isActive() && !m_probeReply) m_recoveryTimer.start(m_recoveryDelay);
+}
+void Cider::observeConnection(int status, QNetworkReply::NetworkError error) {
+    if (status==401 || status==403) {
+        m_connectionState="access"; m_connectionMessage=m_apiToken.isEmpty()?"Connect Spun to Cider.":"Cider access expired or is missing permissions. Reconnect to approve Spun.";
+        m_needsToken=true; m_queueReady=false; m_recoveryTimer.stop();
+    } else if (!status && error!=QNetworkReply::NoError) {
+        m_connectionState=(error==QNetworkReply::TimeoutError || error==QNetworkReply::OperationCanceledError)?"timeout":"offline";
+        m_connectionMessage=launching()?"Cider is starting…":m_available?"Cider’s local API is unavailable. Check Connectivity in Cider.":"Cider isn’t reachable. Open it to reconnect.";
+        scheduleRecovery();
+    } else return;
+    emit connectionChanged(); emit queueStatusChanged();
+}
+void Cider::reconnect() {
+    if (m_probeReply || m_authReply) return;
+    m_recoveryTimer.stop();
+    auto url=m_rpcBase; url.setPath("/api/v2/client/info"); url.setQuery(QString());
+    QNetworkRequest req(url); req.setTransferTimeout(4000);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
+    req.setRawHeader("apptoken",m_apiToken.toUtf8());
+    auto *reply=m_rpcNetwork.get(req); m_probeReply=reply;
+    const int generation=m_tokenGeneration;
+    connect(reply,&QNetworkReply::readyRead,reply,[reply] { if(reply->bytesAvailable()>65536)reply->abort(); });
+    connect(reply,&QNetworkReply::finished,this,[this,reply,generation] {
+        reply->deleteLater(); m_probeReply=nullptr;
+        if(generation!=m_tokenGeneration)return;
+        const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto object=QJsonDocument::fromJson(reply->readAll()).object();
+        const auto data=object.value("data").isObject()?object.value("data").toObject():object;
+        if (status==200 && reply->error()==QNetworkReply::NoError && data.value("version").isString()) {
+            m_connectionState="connected"; m_connectionMessage.clear(); m_needsToken=false; m_queueError.clear(); m_recoveryDelay=3000;
+            emit connectionChanged(); emit queueStatusChanged(); emit connectionRestored();
+            if(m_queueVisible || m_libraryVisible)refreshQueue();
+        } else {
+            m_recoveryDelay=qMin(30000,m_recoveryDelay*2);
+            observeConnection(status,reply->error()); scheduleRecovery();
+        }
+    });
 }
 void Cider::queueFailed(const QString &message, bool needsToken) {
     m_queueBusy=false; m_needsToken=needsToken;
-    if (m_afterQueue) { m_afterQueue={}; m_controlBusy=false; emit controlChanged(); emit apiFeedback("Couldn’t verify the queue. Refresh it and try again.",true); }
+    if (m_afterQueue) { m_afterQueue={}; if(!m_batchOps.isEmpty())finishBatch(false);else if(!m_cleanupIndices.isEmpty())finishCleanup(false);else if(!m_insertItems.isEmpty())finishInsert(false);else { m_controlBusy=false; emit controlChanged(); emit apiFeedback("Couldn’t verify the queue. Refresh it and try again.",true); } }
     if (needsToken) m_queueReady=false;
     m_pendingQueue.clear();
     m_queueError=message;
@@ -275,7 +402,7 @@ void Cider::refreshQueue() {
     fetchQueue();
 }
 void Cider::fetchQueue() {
-    if (m_queueBusy || m_needsToken) return;
+    if (m_queueBusy || m_needsToken || recovering()) return;
     m_queueBusy=true;
     m_pendingQueue.clear(); m_pendingQueueTotal=-1; m_pendingQueuePosition=-1;
     requestQueuePage(0);
@@ -294,12 +421,15 @@ void Cider::requestQueuePage(int offset) {
     connect(reply,&QNetworkReply::downloadProgress,reply,[reply](qint64 received,qint64 total) {
         if (received>16*1024*1024 || total>16*1024*1024) reply->abort();
     });
-    connect(reply,&QNetworkReply::finished,this,[this,reply,offset] {
+    const int generation=m_tokenGeneration;
+    connect(reply,&QNetworkReply::finished,this,[this,reply,offset,generation] {
+        if (generation!=m_tokenGeneration) { reply->deleteLater(); return; }
         const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto bytes=reply->readAll();
         const auto error=reply->error(); reply->deleteLater();
         const auto doc=QJsonDocument::fromJson(bytes);
         const auto object=doc.object();
+        observeConnection(status,error);
         if (status==401 || status==403) {
             queueFailed(m_apiToken.isEmpty() ? "Connect Cider to see your queue." : "Check the Spun token and its queue access in Cider.",true); return;
         }
@@ -333,7 +463,9 @@ void Cider::requestQueuePage(int offset) {
             if (artUrl.scheme()!="https" && artUrl.scheme()!="http") art.clear();
             m_pendingQueue.append(QVariantMap{{"title",attr.value("name").toString("Unknown track")},
                 {"artist",attr.value("artistName").toString("Unknown artist")}, {"duration",attr.value("durationInMillis").toDouble()},
-                {"id",track.value("id").toString()}, {"rpcIndex",index++}, {"artwork",art}});
+                {"id",track.value("id").toString()}, {"type",track.value("type").toString()},
+                {"catalogId",attr.value("playParams").toObject().value("catalogId").toString()}, {"url",attr.value("url").toString()},
+                {"playable",!attr.value("playParams").toObject().isEmpty()}, {"rpcIndex",index++}, {"artwork",art}});
         }
         if (index<total) { requestQueuePage(index); return; }
         const bool changed=m_queue!=m_pendingQueue;
@@ -343,19 +475,7 @@ void Cider::requestQueuePage(int offset) {
         m_queue=m_pendingQueue; m_pendingQueue.clear();
         m_queueIndex=nextIndex;
         m_queueBusy=false; m_queueReady=true; m_needsToken=false; m_queueError.clear();
-        if (!m_apiToken.isEmpty() && !m_connectionPath.isEmpty()) {
-            QFile previous(m_connectionPath); QByteArray old;
-            if (previous.open(QIODevice::ReadOnly)) old=previous.readAll();
-            const auto next=QJsonDocument(QJsonObject{{"token",m_apiToken}}).toJson(QJsonDocument::Compact);
-            if (old!=next) {
-                QDir().mkpath(QFileInfo(m_connectionPath).absolutePath());
-                QSaveFile file(m_connectionPath);
-                if (file.open(QIODevice::WriteOnly)) {
-                    file.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner);
-                    file.write(next); file.commit();
-                }
-            }
-        }
+        if (!m_apiToken.isEmpty()) saveToken();
         if (changed) emit queueChanged();
         if (indexChanged) emit currentIndexChanged();
         emit queueStatusChanged();
@@ -364,7 +484,8 @@ void Cider::requestQueuePage(int offset) {
     });
 }
 void Cider::select(int index) {
-    if (m_controlBusy || !m_queueReady || !m_queueError.isEmpty() || index < 0 || index >= m_queue.size()) return;
+    if (m_controlBusy || m_queueBusy || !m_queueReady || !m_queueError.isEmpty() || index < 0 || index >= m_queue.size()) return;
+    m_controlBusy=true; emit controlChanged();
     auto url=m_rpcBase; url.setPath("/api/v2/queue/jump");
     QNetworkRequest request(url);
     request.setTransferTimeout(3000);
@@ -375,7 +496,9 @@ void Cider::select(int index) {
     const auto data=QJsonDocument(QJsonObject{{"index",m_queue[index].toMap().value("rpcIndex").toInt()}}).toJson();
     auto *reply=m_rpcNetwork.post(request,data);
     connect(reply,&QNetworkReply::finished,this,[this,reply] {
-        if (reply->error()!=QNetworkReply::NoError) { m_queueError="Could not play that queued track."; emit queueStatusChanged(); }
+        const bool failed=reply->error()!=QNetworkReply::NoError;
+        m_controlBusy=false; emit controlChanged();
+        if (failed) emit apiFeedback("Could not play that queued track. Try again.",true);
         reply->deleteLater(); refresh(); refreshQueue();
     });
 }
@@ -473,20 +596,20 @@ void Cider::requestDiscTracks(const QString &path, int generation) {
 }
 
 // Cider v2 contracts are shared with ciderapp/CiderDeck's official client.
-void Cider::apiRequest(const QByteArray &method, const QString &endpoint, const QJsonObject &body, std::function<void(bool,QJsonObject)> done) {
-    if (m_apiToken.isEmpty()) { emit apiFeedback("Connect Spun to Cider in Queue first.",true); done(false,{}); return; }
+void Cider::apiRequest(const QByteArray &method, const QString &endpoint, const QJsonObject &body, std::function<void(bool,QJsonObject)> done, bool reportError) {
+    if (m_apiToken.isEmpty()) { if(reportError)emit apiFeedback("Connect Spun to Cider in Queue first.",true); done(false,{}); return; }
     auto url=m_rpcBase; url.setPath("/api/v2"+endpoint); url.setQuery(QString());
     QNetworkRequest req(url); req.setTransferTimeout(6000);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
     req.setRawHeader("apptoken",m_apiToken.toUtf8()); req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
     auto *reply=m_rpcNetwork.sendCustomRequest(req,method,body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(reply,&QNetworkReply::readyRead,reply,[reply] { if (reply->bytesAvailable()>512*1024) reply->abort(); });
-    connect(reply,&QNetworkReply::finished,this,[this,reply,done] {
+    connect(reply,&QNetworkReply::finished,this,[this,reply,done,reportError] {
         reply->deleteLater(); const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto bytes=reply->readAll(); const auto doc=QJsonDocument::fromJson(bytes); const auto json=doc.object();
         const bool ok=reply->error()==QNetworkReply::NoError && status>=200 && status<300 &&
             (bytes.trimmed().isEmpty() || doc.isObject()) && !json.contains("error") && !json.contains("errors");
-        if (!ok) emit apiFeedback(status==401 || status==403 ? "Check Spun’s API permissions in Cider." :
+        if (!ok && reportError) emit apiFeedback(status==401 || status==403 ? "Check Spun’s API permissions in Cider." :
             status==404 || status==405 ? "This control isn’t supported by your Cider version." : "Cider couldn’t confirm the change. Check its state before retrying.",true);
         done(ok,json);
     });
@@ -568,22 +691,157 @@ void Cider::changeMode(const QString &mode, bool value) {
 }
 void Cider::moveQueue(int from, int to, int revision) { editQueue(from,to,revision,false); }
 void Cider::removeQueue(int index, int revision) { editQueue(index,index,revision,true); }
+// Queue identity excludes mutable artwork and rpcIndex, and preserves duplicates.
+static QString queueKey(const QVariantMap &row) {
+    const auto catalog=row.value("catalogId").toString();
+    return !catalog.isEmpty()?"songs:"+catalog:row.value("type").toString()+":"+row.value("id").toString();
+}
+static QStringList queueKeys(const QVariantList &rows) {
+    QStringList result; result.reserve(rows.size());
+    for(const auto &row:rows)result.append(queueKey(row.toMap()));
+    return result;
+}
+QVariantMap Cider::previewCleanup(const QString &mode) const {
+    if((mode!="duplicates" && mode!="upcoming") || !m_queueReady || !m_queueError.isEmpty() || m_queueBusy || controlBusy() || recovering())return {};
+    QSet<QString> seen; QVariantList rows,indices;
+    // Unknown identities must never be treated as duplicates by their title.
+    auto identity=[](const QVariantMap &row) {
+        if(!QStringList{"songs","library-songs"}.contains(row.value("type").toString()) || row.value("id").toString().isEmpty())return QString();
+        return queueKey(row);
+    };
+    if(m_queueIndex>=0 && m_queueIndex<m_queue.size())seen.insert(identity(m_queue[m_queueIndex].toMap()));
+    for(int i=qMax(0,m_queueIndex+1);i<m_queue.size();++i) {
+        const auto row=m_queue[i].toMap();const auto key=identity(row);
+        if(mode=="upcoming" || (!key.isEmpty() && seen.contains(key))) { rows.append(row);indices.append(i); }
+        if(!key.isEmpty())seen.insert(key);
+    }
+    return {{"rows",rows},{"indices",indices},{"revision",m_queueRevision},{"mode",mode}};
+}
+void Cider::cleanQueue(const QString &mode, int revision) {
+    const auto preview=previewCleanup(mode);
+    if(preview.isEmpty())return;
+    if(revision!=m_queueRevision) { emit apiFeedback("The queue changed. Preview cleanup again.",true);return; }
+    const auto indices=preview.value("indices").toList();if(indices.isEmpty())return;
+    m_cleanupIndices.clear();for(const auto &index:indices)m_cleanupIndices.append(index.toInt());
+    m_cleanupExpected=queueKeys(m_queue);m_cleanupDone=0;m_cleanupPosition=m_queueIndex;m_cleanupGeneration=m_tokenGeneration;
+    m_undoTrack.clear();m_controlBusy=true;emit controlChanged();emit queueStatusChanged();
+    emit apiFeedback("Cleaning upcoming queue…",false);
+    m_afterQueue=[this,revision] { if(revision!=m_queueRevision)finishCleanup(false);else cleanupNext(); };fetchQueue();
+}
+void Cider::finishCleanup(bool success) {
+    const int done=m_cleanupDone,total=m_cleanupIndices.size();
+    m_cleanupIndices.clear();m_cleanupExpected.clear();m_controlBusy=false;
+    emit controlChanged();emit queueStatusChanged();
+    emit apiFeedback(success ? QString("Removed %1 upcoming %2").arg(done).arg(done==1?"song":"songs") :
+        QString("%1 of %2 removals confirmed. Cleanup stopped; check the queue before retrying.").arg(done).arg(total),!success);
+}
+void Cider::cleanupNext() {
+    if(m_cleanupGeneration!=m_tokenGeneration || queueKeys(m_queue)!=m_cleanupExpected || m_queueIndex!=m_cleanupPosition) { finishCleanup(false);return; }
+    if(m_cleanupDone==m_cleanupIndices.size()) { finishCleanup(true);return; }
+    const int index=m_cleanupIndices[m_cleanupIndices.size()-1-m_cleanupDone];
+    if(index<=m_queueIndex || index<0 || index>=m_queue.size()) { finishCleanup(false);return; }
+    apiRequest("DELETE","/queue/items/"+QString::number(index),{},[this,index,generation=m_cleanupGeneration](bool ok,QJsonObject) {
+        if(generation!=m_tokenGeneration)return;
+        if(!ok) { finishCleanup(false);refreshQueue();return; }
+        m_cleanupExpected.removeAt(index);
+        m_afterQueue=[this] {
+            if(queueKeys(m_queue)!=m_cleanupExpected || m_queueIndex!=m_cleanupPosition) { finishCleanup(false);return; }
+            ++m_cleanupDone;cleanupNext();
+        };fetchQueue();
+    });
+}
 void Cider::editQueue(int from, int to, int revision, bool remove) {
     if (controlBusy() || m_queueBusy || !m_queueReady || !m_queueError.isEmpty()) return;
     if (revision!=m_queueRevision) { emit apiFeedback("The queue changed. Try again.",true); return; }
     if (from<0 || to<0 || from>=m_queue.size() || to>=m_queue.size() || (!remove && from==to)) return;
-    m_controlBusy=true; emit controlChanged();
-    // Index-based endpoints require a fresh queue before writing. Do not guess after a change.
+    m_undoTrack.clear(); m_controlBusy=true; emit queueStatusChanged(); emit controlChanged();
     m_afterQueue=[this,from,to,revision,remove] {
         if (revision!=m_queueRevision) { m_controlBusy=false; emit controlChanged(); emit apiFeedback("The queue changed. Try again.",true); return; }
+        const auto removed=m_queue[from].toMap(); auto expected=queueKeys(m_queue);
+        const int current=m_queueIndex;
+        if(remove)expected.removeAt(from);else expected.move(from,to);
         apiRequest(remove?"DELETE":"POST",remove?"/queue/items/"+QString::number(from):"/queue/move",
-            remove?QJsonObject{}:QJsonObject{{"from",from},{"to",to}},[this,remove](bool ok,QJsonObject) {
+            remove?QJsonObject{}:QJsonObject{{"from",from},{"to",to}},[this,remove,removed,expected,from,current](bool ok,QJsonObject) {
                 if (!ok) { m_controlBusy=false; emit controlChanged(); refreshQueue(); return; }
-                m_afterQueue=[this,remove] { m_controlBusy=false; emit controlChanged(); emit apiFeedback(remove?"Removed from queue":"Queue reordered",false); };
+                m_afterQueue=[this,remove,removed,expected,from,current] {
+                    m_controlBusy=false; emit controlChanged();
+                    if(queueKeys(m_queue)!=expected) { emit apiFeedback("The queue changed. Check it before retrying.",true);return; }
+                    // Restoring a removed current song would also need to rewind playback.
+                    if(remove && from!=current && m_queueIndex==(from<current?current-1:current) && removed.value("playable").toBool()) {
+                        m_undoTrack=removed;m_undoIndex=from;m_undoRevision=m_queueRevision;m_undoClock.start();
+                        const int revision=m_undoRevision;
+                        QTimer::singleShot(8000,this,[this,revision] { if(revision==m_undoRevision) { m_undoTrack.clear();emit queueStatusChanged(); } });
+                    }
+                    emit queueStatusChanged();emit apiFeedback(remove?"Removed from queue":"Queue reordered",false);
+                };
                 fetchQueue();
             });
+    }; fetchQueue();
+}
+void Cider::undoQueueRemoval() {
+    if(!canUndoQueue() || controlBusy() || m_queueBusy)return;
+    const auto track=m_undoTrack;const int index=m_undoIndex,revision=m_undoRevision;
+    m_restoringQueue=true;insertQueue({track},index,revision);
+    if(!m_controlBusy)m_restoringQueue=false;
+}
+void Cider::insertQueue(const QVariantList &items, int index, int revision) {
+    if(controlBusy() || m_queueBusy || !m_queueReady || !m_queueError.isEmpty() || items.isEmpty())return;
+    if(revision!=m_queueRevision || index<0 || index>m_queue.size() || (!m_restoringQueue && index<=m_queueIndex)) {
+        emit apiFeedback("Drop into the upcoming queue and try again.",true);return;
+    }
+    if(items.size()>5000 || m_queue.size()+items.size()>10000) { emit apiFeedback("This queue is too large to insert more songs.",true);return; }
+    static const QRegularExpression identifier("^[A-Za-z0-9._-]{1,200}$");
+    for(const auto &value:items) { const auto row=value.toMap();
+        if(!row.value("playable").toBool() || !QStringList{"songs","library-songs"}.contains(row.value("type").toString()) || !identifier.match(row.value("id").toString()).hasMatch()) {
+            emit apiFeedback("Only available songs can be inserted.",true);return;
+        }
+    }
+    m_undoTrack.clear();m_insertItems=items;m_insertAt=index;m_insertDone=0;
+    m_insertExpected=queueKeys(m_queue);m_insertPosition=m_queueIndex;m_controlBusy=true;
+    emit controlChanged();emit queueStatusChanged();
+    m_afterQueue=[this,revision] { if(revision!=m_queueRevision)finishInsert(false);else insertNext(); };fetchQueue();
+}
+void Cider::finishInsert(bool success) {
+    const int done=m_insertDone,total=m_insertItems.size();const bool undo=m_restoringQueue;
+    m_insertItems.clear();m_insertExpected.clear();m_controlBusy=false;m_restoringQueue=false;
+    emit controlChanged();emit queueStatusChanged();
+    emit apiFeedback(success?(undo?"Restored to its original position":(total==1?QString("Song inserted"):QString("%1 tracks inserted").arg(total))):
+        QString("%1 of %2 tracks placed. Check the queue before retrying; a song may remain at the end.").arg(done).arg(total),!success);
+}
+void Cider::verifyInsert(const QStringList &before,int beforePosition,std::function<void()> done,int attempts) {
+    m_afterQueue=[this,before,beforePosition,done,attempts] {
+        const auto actual=queueKeys(m_queue);
+        if(actual==m_insertExpected && m_queueIndex==m_insertPosition) {done();return;}
+        // Cider can acknowledge a command before its catalog lookup finishes.
+        // Re-read the unchanged pre-action state; never repeat the mutation.
+        if(attempts>0 && actual==before && m_queueIndex==beforePosition) {
+            QTimer::singleShot(250,this,[this,before,beforePosition,done,attempts] {
+                if(!m_insertItems.isEmpty())verifyInsert(before,beforePosition,done,attempts-1);
+            });
+        } else finishInsert(false);
     };
     fetchQueue();
+}
+void Cider::insertNext() {
+    if(queueKeys(m_queue)!=m_insertExpected || m_queueIndex!=m_insertPosition) { finishInsert(false);return; }
+    if(m_insertDone>=m_insertItems.size()) { finishInsert(true);return; }
+    const auto row=m_insertItems[m_insertDone].toMap();
+    apiRequest("POST","/queue/add-later",{{"type",row.value("type").toString()},{"id",row.value("id").toString()}},[this,row](bool ok,QJsonObject) {
+        if(!ok) { finishInsert(false);refreshQueue();return; }
+        const auto before=m_insertExpected;const int position=m_insertPosition;
+        m_insertExpected.append(queueKey(row));
+        verifyInsert(before,position,[this] {
+            const int from=m_queue.size()-1,to=m_insertAt+m_insertDone;
+            if(from==to) { ++m_insertDone;insertNext();return; }
+            apiRequest("POST","/queue/move",{{"from",from},{"to",to}},[this,from,to](bool ok,QJsonObject) {
+                if(!ok) { finishInsert(false);refreshQueue();return; }
+                const auto beforeMove=m_insertExpected;const int beforePosition=m_insertPosition;
+                m_insertExpected.move(from,to);
+                if(to<=m_insertPosition)++m_insertPosition;
+                verifyInsert(beforeMove,beforePosition,[this] {++m_insertDone;insertNext();});
+            });
+        });
+    });
 }
 QStringList Cider::launchCommand() {
     const auto native=QStandardPaths::findExecutable("cider");
@@ -610,5 +868,130 @@ void Cider::ensureRunning() {
         if (program.isEmpty() || !QProcess::startDetached(program,command)) {
             m_launchTimer.stop(); emit launchChanged(); emit apiFeedback("Couldn’t start Cider. Open it from your application launcher.",true);
         }
+    });
+}
+
+void Cider::refreshAudioOptions() {
+    if(m_audioBusy)return;
+    m_audioBusy=true;m_audioError.clear();emit audioOptionsChanged();
+    apiRequest("GET","/audio/automix",{},[this](bool ok,QJsonObject json) {
+        const auto data=json.value("data").toObject();
+        if(ok && data.value("enabled").isBool())m_audioOptions["automix"]=data.value("enabled").toBool();else m_audioOptions.remove("automix");
+        apiRequest("GET","/audio/listening-mode",{},[this](bool ok,QJsonObject json) {
+            const auto data=json.value("data").toObject();const auto mode=data.value("mode").toString();
+            if(ok && data.value("available").toBool(true) && QStringList{"off","gaming","unwind"}.contains(mode))m_audioOptions["listeningMode"]=mode;else m_audioOptions.remove("listeningMode");
+            if(m_audioOptions.isEmpty())m_audioError="Extra audio controls aren’t available with this Cider connection.";
+            m_audioBusy=false;emit audioOptionsChanged();
+        });
+    });
+}
+void Cider::setAudioOption(const QString &key,const QVariant &value) {
+    if(m_audioBusy || !m_audioOptions.contains(key) || m_audioOptions.value(key)==value)return;
+    if((key=="automix" && value.metaType().id()!=QMetaType::Bool) || (key=="listeningMode" && !QStringList{"off","gaming","unwind"}.contains(value.toString())))return;
+    if(key!="automix" && key!="listeningMode")return;
+    const auto endpoint=key=="automix"?"/audio/automix":"/audio/listening-mode";
+    const auto field=key=="automix"?"enabled":"mode";
+    m_audioBusy=true;m_audioError.clear();emit audioOptionsChanged();
+    apiRequest("PATCH",endpoint,{{field,QJsonValue::fromVariant(value)}},[this,key,value,endpoint,field](bool ok,QJsonObject) {
+        if(!ok) { m_audioOptions.remove(key);m_audioBusy=false;m_audioError="Refresh audio settings before trying again.";emit audioOptionsChanged();return; }
+        apiRequest("GET",endpoint,{},[this,key,value,field](bool read,QJsonObject json) {
+            const auto actual=json.value("data").toObject().value(field).toVariant();
+            if(read && actual==value)m_audioOptions[key]=actual;
+            else { m_audioOptions.remove(key);m_audioError="Cider hasn’t confirmed this setting. Refresh to check."; }
+            m_audioBusy=false;emit audioOptionsChanged();
+        });
+    });
+}
+void Cider::copySongLink() {
+    if(m_linkBusy)return;
+    const auto track=m_track;m_linkBusy=true;
+    apiRequest("GET","/playback/now-playing",{},[this,track](bool ok,QJsonObject json) {
+        m_linkBusy=false;
+        if(track!=m_track) { emit apiFeedback("The song changed. Copy its link again.",true);return; }
+        const auto link=Library::songLink(json.value("data").toObject().value("url").toString());
+        if(!ok || link.isEmpty()) { emit apiFeedback("No shareable Apple Music link for this song.",true);return; }
+        QGuiApplication::clipboard()->setText(link);emit apiFeedback("Song link copied",false);
+    });
+}
+
+void Cider::refreshAudioQuality() {
+    if(m_qualityBusy)return;
+    const auto track=m_track; m_qualityBusy=true;m_audioQuality.clear();emit audioQualityChanged();
+    apiRequest("GET","/playback/audio-quality",{},[this,track](bool ok,QJsonObject json) {
+        m_qualityBusy=false;
+        if(track!=m_track) { m_audioQuality="Song changed. Refresh to see its quality.";emit audioQualityChanged();return; }
+        const auto data=json.value("data").toObject();
+        QStringList lines;const auto label=data.value("flavorLabel").toString().trimmed().left(120);
+        if(ok && !label.isEmpty())lines.append(label);
+        const auto output=data.value("deviceAudioConfig").toObject();
+        const auto rate=output.value("sampleRate").toDouble();const auto channels=output.value("channelCount").toInt();
+        // Device output is not the source file's sample rate or quality.
+        if(ok && rate>=8000 && rate<=768000) lines.append(QString("Output: %1 kHz").arg(rate/1000.,0,'g',5)+(channels>0 && channels<=32?QString(" · %1 channels").arg(channels):QString()));
+        m_audioQuality=lines.isEmpty()?"Quality unavailable from Cider.":lines.join("\n");emit audioQualityChanged();
+    });
+}
+
+void Cider::setLiveVisible(bool visible) {
+    if(m_liveVisible==visible)return;
+    m_liveVisible=visible;updateEvents();emit liveChanged();
+}
+void Cider::updateEvents() {
+    m_events.configure(m_liveVisible,m_rpcBase,m_apiToken.toUtf8());
+    if(!m_liveVisible) { m_eventCoalesce.stop();m_eventQueue=m_eventSettings=false; }
+}
+
+void Cider::editQueueSelection(const QVariantList &indices, const QString &operation, int revision) {
+    if(controlBusy() || m_queueBusy || !m_queueReady || !m_queueError.isEmpty() || recovering())return;
+    if(revision!=m_queueRevision) { emit apiFeedback("The queue changed. Select the songs again.",true);return; }
+    if(indices.size()>5000) { emit apiFeedback("Select up to 5,000 songs at a time.",true);return; }
+    if(indices.isEmpty() || !QStringList{"up","down","next","end","remove"}.contains(operation))return;
+    QList<int> positions;QSet<int> selected;
+    for(const auto &value:indices) {
+        bool ok=false;const int index=value.toInt(&ok);
+        if(!ok || value.toDouble()!=index || index<=m_queueIndex || index<0 || index>=m_queue.size() || selected.contains(index))return;
+        positions.append(index);selected.insert(index);
+    }
+    std::sort(positions.begin(),positions.end());m_batchOps.clear();
+    const int first=qMax(0,m_queueIndex+1),last=m_queue.size()-1;
+    if(operation=="up" || operation=="next") {
+        int destination=first;
+        for(int index:positions) {
+            const int to=operation=="next"?destination++:index-1;
+            if(to>=first && to!=index && (operation=="next" || !selected.contains(to))) { m_batchOps.append({index,to});selected.remove(index);selected.insert(to); }
+        }
+    } else {
+        int destination=last;
+        for(auto it=positions.crbegin();it!=positions.crend();++it) {
+            const int index=*it,to=operation=="remove"?-1:operation=="end"?destination--:index+1;
+            if(operation=="remove" || (to<=last && to!=index && (operation=="end" || !selected.contains(to)))) { m_batchOps.append({index,to});selected.remove(index);selected.insert(to); }
+        }
+    }
+    if(m_batchOps.isEmpty()) { emit apiFeedback("Selected songs are already there",false);return; }
+    m_batchExpected=queueKeys(m_queue);m_batchPosition=m_queueIndex;m_batchGeneration=m_tokenGeneration;m_batchDone=0;
+    m_undoTrack.clear();m_controlBusy=true;emit controlChanged();emit queueStatusChanged();
+    emit apiFeedback(operation=="remove"?"Removing selected songs…":"Moving selected songs…",false);
+    m_afterQueue=[this,revision] { if(revision!=m_queueRevision)finishBatch(false);else batchNext(); };fetchQueue();
+}
+void Cider::finishBatch(bool success) {
+    const int done=m_batchDone,total=m_batchOps.size();
+    m_batchOps.clear();m_batchExpected.clear();m_controlBusy=false;
+    emit controlChanged();emit queueStatusChanged();
+    emit apiFeedback(success?QString("Updated %1 selected %2").arg(done).arg(done==1?"song":"songs"):
+        QString("%1 of %2 changes confirmed. Stopped; check the queue before retrying.").arg(done).arg(total),!success);
+}
+void Cider::batchNext() {
+    if(m_batchGeneration!=m_tokenGeneration || queueKeys(m_queue)!=m_batchExpected || m_queueIndex!=m_batchPosition) { finishBatch(false);return; }
+    if(m_batchDone==m_batchOps.size()) { finishBatch(true);return; }
+    const auto [from,to]=m_batchOps[m_batchDone];
+    if(from<=m_queueIndex || from>=m_queue.size() || (to>=0 && (to<=m_queueIndex || to>=m_queue.size()))) { finishBatch(false);return; }
+    const bool remove=to<0;
+    apiRequest(remove?"DELETE":"POST",remove?"/queue/items/"+QString::number(from):"/queue/move",remove?QJsonObject{}:QJsonObject{{"from",from},{"to",to}},[this,from,to,generation=m_batchGeneration](bool ok,QJsonObject) {
+        if(generation!=m_tokenGeneration)return;
+        if(!ok) { finishBatch(false);refreshQueue();return; }
+        if(to<0)m_batchExpected.removeAt(from);else m_batchExpected.move(from,to);
+        m_afterQueue=[this] {
+            if(queueKeys(m_queue)!=m_batchExpected || m_queueIndex!=m_batchPosition) { finishBatch(false);return; }
+            ++m_batchDone;batchNext();
+        };fetchQueue();
     });
 }

@@ -55,6 +55,7 @@ void Disc::paint(QPainter *p) {
     const double side = qMin(width(), height());
     p->translate((width() - side) / 2, (height() - side) / 2);
     p->scale(side / 1000, side / 1000);
+    if (m_vinyl) { paintVinyl(p); return; }
     const QPointF center(500, 500);
     QPainterPath annulus;
     annulus.setFillRule(Qt::OddEvenFill);
@@ -108,6 +109,48 @@ void Disc::paint(QPainter *p) {
     p->setBrush(Qt::NoBrush); p->setPen(QPen(QColor(255, 255, 255, 110), 2)); p->drawEllipse(center, 91, 91);
     p->setPen(QPen(QColor(0, 0, 0, 150), 4)); p->drawEllipse(center, 56, 56);
     p->setPen(QPen(QColor(255, 255, 255, 150), 1.3)); p->drawEllipse(center, 59, 59);
+}
+
+void Disc::paintVinyl(QPainter *p) {
+    const QPointF center(500,500);
+    QPainterPath record; record.setFillRule(Qt::OddEvenFill);
+    record.addEllipse(center,497,497); record.addEllipse(center,16,16);
+    p->setClipPath(record);
+    if (m_overlay) {
+        // Fixed light over a rotating, cached record texture; no per-frame painting.
+        QConicalGradient sheen(center,24);
+        sheen.setColorAt(0,Qt::transparent); sheen.setColorAt(.12,QColor(190,202,218,18));
+        sheen.setColorAt(.22,Qt::transparent); sheen.setColorAt(.5,Qt::transparent);
+        sheen.setColorAt(.63,QColor(255,235,205,14)); sheen.setColorAt(.73,Qt::transparent); sheen.setColorAt(1,Qt::transparent);
+        p->fillPath(record,sheen); return;
+    }
+    QRadialGradient body(center,500);
+    body.setColorAt(0,QColor("#141519")); body.setColorAt(.46,QColor("#17181c"));
+    body.setColorAt(.94,QColor("#101114")); body.setColorAt(1,QColor("#24252a"));
+    p->fillPath(record,body);
+    p->setBrush(Qt::NoBrush);
+    const int inner=m_labelColor.isValid()?475:213;
+    for (int r=inner;r<488;r+=4) {
+        p->setPen(QPen(QColor(180,185,195,(r%12==1)?26:12),.85));p->drawEllipse(center,r,r);
+        p->setPen(QPen(QColor(0,0,0,75),1));p->drawEllipse(center,r+1.5,r+1.5);
+    }
+    if(!m_labelColor.isValid()) {
+        for(int r:{242,310,381,452}) { p->setPen(QPen(QColor(2,3,5,115),3));p->drawEllipse(center,r,r); }
+    }
+    const double radius=m_labelColor.isValid()?470:198;
+    QPainterPath label; label.addEllipse(center,radius,radius);
+    p->save();p->setClipPath(label,Qt::IntersectClip);
+    if(m_labelColor.isValid())p->fillPath(label,m_labelColor);
+    else {
+        if(m_art.isNull()&&m_fallback.isNull()) { static const QImage shared=fallbackArt();m_fallback=shared; }
+        const auto &art=m_art.isNull()?m_fallback:m_art;const double crop=qMin(art.width(),art.height());
+        p->drawImage(QRectF(500-radius,500-radius,radius*2,radius*2),art,QRectF((art.width()-crop)/2,(art.height()-crop)/2,crop,crop));
+    }
+    p->restore();
+    p->setBrush(Qt::NoBrush);p->setPen(QPen(QColor(0,0,0,120),3));p->drawEllipse(center,radius+1,radius+1);
+    if(!m_labelColor.isValid()) {p->setPen(QPen(QColor(255,255,255,32),1));p->drawEllipse(center,178,178);}
+    p->setPen(QPen(QColor(0,0,0,170),3));p->drawEllipse(center,18,18);
+    p->setPen(QPen(QColor(255,255,255,40),1));p->drawEllipse(center,21,21);
 }
 
 class RingNode final : public QSGGeometryNode {

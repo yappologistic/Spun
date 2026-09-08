@@ -1,5 +1,6 @@
 #include "player.h"
 #include "library.h"
+#include "listening.h"
 #include "musicactions.h"
 #ifdef SPUN_DIAGNOSTICS
 #include "librarytest.h"
@@ -34,6 +35,7 @@
 #include <QSaveFile>
 #ifdef SPUN_DIAGNOSTICS
 #include <QTest>
+#include <QQuickItemGrabResult>
 #endif
 #include <QTimer>
 #include <QElapsedTimer>
@@ -115,14 +117,17 @@ public:
         window->resize(targetWidth, targetHeight);
         window->setMinimumWidth(targetWidth);
         window->setMinimumHeight(targetHeight);
+        if (mini && window->property("menuOpen").toBool()) { window->setMask(QRegion(0,0,targetWidth,targetHeight));return; }
         if (mini) {
             QRegion region(6,6,288,288,QRegion::Ellipse);
             if (window->property("backgroundBlur").toBool()) {
                 QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0,0,300,targetHeight),21,21);
                 region=QRegion(backdrop.toFillPolygon().toPolygon());
             }
-            else region-=QRegion(136,136,28,28,QRegion::Ellipse);
+            else region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
             region |= QRegion(50,268,200,84);
+            if (auto *notice=window->findChild<QQuickItem *>("actionNotice"); notice && notice->isVisible())
+                region |= QRegion(notice->mapRectToScene(notice->boundingRect()).toAlignedRect());
             window->setMask(region); return;
         }
         if (window->property("helpOpen").toBool() || window->property("menuOpen").toBool()) {
@@ -133,7 +138,7 @@ public:
             window->setMask(QRegion(backdrop.toFillPolygon().toPolygon())); return;
         }
         QRegion region(44, 73, 442, 442, QRegion::Ellipse);
-        region -= QRegion(243, 272, 44, 44, QRegion::Ellipse);
+        region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
             region |= QRegion(bar->mapRectToScene(bar->boundingRect()).toAlignedRect());
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
@@ -308,7 +313,7 @@ static int exerciseCiderQueue(const QString &temp) {
     check(waitFor([&]{return !remote.queueBusy() && remote.queueError().isEmpty();}), "Cider queue recovers after endpoint failure");
     remote.select(1);
     check(waitFor([&]{return selected==1;}), "Cider queue selection sends the correct provider index");
-    check(waitFor([&]{return !remote.queueBusy();}),"queue selection refresh settles before editing");
+    check(waitFor([&]{return !remote.controlBusy()&&!remote.queueBusy();}),"queue selection refresh settles before editing");
     remote.refreshModes();check(waitFor([&]{return remote.modesReady();})&&!remote.shuffle()&&!remote.autoplay(),"Cider v2 reports shuffle and autoplay modes");
     remote.setShuffle(true);remote.setShuffle(true);
     check(waitFor([&]{return !remote.controlBusy();})&&remote.shuffle()&&shuffleMode&&modeEdits==1,"shuffle uses one API toggle and confirms the actual mode");
@@ -451,6 +456,15 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         if (type->systemFamily() != "Google Sans Flex" && QFontDatabase::hasFamily("Google Sans Flex")) chosen = "Google Sans Flex";
         else if (type->systemFamily() != "Noto Sans" && QFontDatabase::hasFamily("Noto Sans")) chosen = "Noto Sans";
         check(!chosen.isEmpty() && chosen != type->systemFamily(), "an installed alternate font is available for the picker check");
+        window->setProperty("queueOpen",true);QTest::qWait(200);
+        click("menuButton");QTest::qWait(200);
+        auto *settingsPopup=window->findChild<QObject *>("settingsMenu");
+        const auto menuVolume=player.volume();
+        testKeyClick(window,Qt::Key_Down);testKeyClick(window,Qt::Key_Down);
+        check(settingsPopup&&settingsPopup->property("currentIndex").toInt()>=0&&player.volume()==menuVolume,"menu arrow navigation moves focus without changing playback volume");
+        testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
+        check(!settingsPopup->property("visible").toBool()&&window->property("queueOpen").toBool(),"Escape dismisses the settings menu without closing the queue behind it");
+        window->setProperty("queueOpen",false);QTest::qWait(200);
         click("menuButton"); QTest::qWait(250);
         auto *fontLoader=window->findChild<QObject *>("fontPickerLoader");
         auto *fontPreferences=window->findChild<QObject *>("preferencesPopup");
@@ -468,6 +482,23 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         check(waitFor([&] { return window->findChild<QObject *>("fontPicker") != nullptr; }), "Preferences prepares the font picker asynchronously");
         std::cout << "FONT_PREPARE_MS " << fontPrepareMs << std::endl;
         check(readyBeforePreferences, "cold font picker preparation finishes during the Preferences entrance");
+        auto *cdChoice=findItem(window->contentItem(),"cdStyleButton");
+        auto *vinylChoice=findItem(window->contentItem(),"vinylStyleButton");
+        const bool priorVinyl=player.vinyl();
+        cdChoice->forceActiveFocus(Qt::TabFocusReason);testKeyClick(window,Qt::Key_Right);
+        check(vinylChoice->hasActiveFocus()&&player.vinyl()==priorVinyl,"appearance arrows move focus without changing the disc");
+        testKeyClick(window,Qt::Key_Return);check(player.vinyl(),"Enter selects the focused Vinyl appearance");
+        testKeyClick(window,Qt::Key_Left);testKeyClick(window,Qt::Key_Return);
+        check(!player.vinyl(),"keyboard returns to the CD appearance");player.setVinyl(priorVinyl);
+        auto *motionSwitch=findItem(window->contentItem(),"motionToggle");
+        if (motionSwitch) {
+            motionSwitch->forceActiveFocus(Qt::TabFocusReason);
+            const bool priorMotion=player.motion();
+            testKeyClick(window,Qt::Key_Space);
+            check(player.motion()!=priorMotion,"Preferences switch toggles its setting with Space");
+            testKeyClick(window,Qt::Key_Space);
+            check(player.motion()==priorMotion,"Preferences switch restores its setting with the keyboard");
+        } else check(false,"Preferences motion switch exists");
         click("fontChoice");
         auto *picker = window->findChild<QObject *>("fontPicker");
         check(picker && waitFor([&] { return picker->property("opened").toBool(); }), "font picker opens from Preferences");
@@ -479,7 +510,10 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
             search->setProperty("text", chosen); QTest::qWait(50);
             check(list->property("count").toInt() > 0 && search->hasActiveFocus(), "installed fonts can be searched with keyboard focus");
             capture("00-font-picker");
-            testKeyClick(window, Qt::Key_Down); testKeyClick(window, Qt::Key_Return);
+            testKeyClick(window, Qt::Key_Down);
+            check(list->hasActiveFocus() && list->property("currentIndex").toInt()==0,"font keyboard navigation focuses the first result without selecting it");
+            capture("20-font-keyboard-focus");
+            testKeyClick(window, Qt::Key_Return);
             check(waitFor([&] { return !picker->property("visible").toBool(); }) && type->selectedFamily() == chosen,
                   "keyboard selection applies the installed font and closes the picker");
             check(window->property("font").value<QFont>().family() == chosen && songTitle->property("font").value<QFont>().family() == chosen,
@@ -526,6 +560,22 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
           "queue aligns with the source bar top and player card bottom");
     check(qAbs(centerY("queueFooter") - playY) < .1,
           "queue footer actions align with playback controls");
+    auto *localTab=findItem(window->contentItem(),"localSourceButton");
+    auto *ciderTab=findItem(window->contentItem(),"ciderSourceButton");
+    localTab->forceActiveFocus(Qt::TabFocusReason);
+    testKeyClick(window,Qt::Key_Right);
+    check(ciderTab->hasActiveFocus()&&!window->property("useCider").toBool(),"source arrows move focus without switching playback source");
+    testKeyClick(window,Qt::Key_Return);
+    check(window->property("useCider").toBool(),"Enter activates the focused Cider source");
+    testKeyClick(window,Qt::Key_Left);testKeyClick(window,Qt::Key_Return);
+    check(localTab->hasActiveFocus()&&!window->property("useCider").toBool(),"source keyboard navigation returns to Local");
+    auto *volumeControl=findItem(window->contentItem(),"volumeSlider");
+    const qreal originalVolume=player.volume();player.setVolume(.5);QTest::qWait(20);
+    volumeControl->forceActiveFocus(Qt::TabFocusReason);testKeyClick(window,Qt::Key_Right);
+    check(player.volume()>.5,"focused volume slider receives Right instead of the global seek shortcut");
+    testKeyClick(window,Qt::Key_Left);
+    check(qAbs(player.volume()-.5)<.01,"focused volume slider receives Left and restores the previous level");
+    player.setVolume(originalVolume);
     click("ciderSourceButton"); check(window->property("useCider").toBool(), "Cider source selector");
     click("localSourceButton"); check(!window->property("useCider").toBool(), "local source selector");
     auto *sourceIndicator = findItem(window->contentItem(), "sourceIndicator");
@@ -636,7 +686,52 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         return thumb && thumb->property("status").toInt() == 1;
     }), "local queue artwork loads asynchronously beside the title");
     check(waitFor([&]{ return !player.artworkLoading() && !window->property("swapRunning").toBool(); }), "cover and disc swap settle before disc interaction");
+    const auto queueResumePosition=player.position();
+    player.seek(10000);QTest::qWait(120);
+    qint64 expectedRemaining=0;const auto localRows=player.queue();
+    for(int i=player.currentIndex();i<localRows.size();++i)expectedRemaining+=localRows[i].toMap().value("duration").toLongLong();
+    expectedRemaining-=player.position();
+    check(qAbs(window->property("queueRemainingMs").toDouble()-expectedRemaining)<250,"queue listening time subtracts elapsed local playback");
+    player.seek(queueResumePosition);QTest::qWait(120);
     capture("02-playing-queue-dark");
+    check(!findItem(window->contentItem(),"vinylTonearm"),"CD mode does not allocate a tonearm");
+    const auto vinylPosition=player.position(); const auto vinylTrack=player.currentIndex();
+    player.setVinyl(true);QTest::qWait(250);
+    check(window->property("vinyl").toBool()&&player.currentIndex()==vinylTrack&&player.position()==vinylPosition&&!player.playing(),"Vinyl switches appearance without changing playback");
+    { Player restored(temp+"/player.ini"); check(restored.vinyl(),"Vinyl preference survives relaunch"); }
+    check(!window->mask().contains(QPoint(265,294))&&window->mask().contains(QPoint(280,294)),"Vinyl uses a small spindle hole in the input mask");
+    auto *tonearm=findItem(window->contentItem(),"vinylTonearm");
+    auto *shaft=findItem(window->contentItem(),"tonearmShaft");
+    check(tonearm&&shaft&&tonearm->isVisible(),"vinyl creates a decorative tonearm");
+    if(tonearm&&shaft) {
+        check(tonearm->property("lowered").toDouble()==0,"paused vinyl parks its tonearm");
+        capture("14-tonearm-parked");
+        player.play();player.seek(0);QTest::qWait(650);
+        const double outerAngle=tonearm->property("armAngle").toDouble();
+        check(tonearm->property("lowered").toDouble()>.99,"playing lowers the tonearm onto the grooves");
+        capture("14-tonearm-playing");
+        player.seek(player.duration()*.85);QTest::qWait(650);
+        check(tonearm->property("armAngle").toDouble()>outerAngle+12,"tonearm tracks inward as song progress advances");
+        capture("14-tonearm-inner");
+        player.setMiniMode(true);QTest::qWait(450);
+        const auto tip=shaft->mapToScene(QPointF(0,213));
+        check(tonearm->isVisible()&&tip.x()>0&&tip.x()<300&&tip.y()>0&&tip.y()<268,"Mini tonearm stays on the record above its controls");
+        capture("14-tonearm-mini");player.setMiniMode(false);QTest::qWait(250);
+        player.pause();QTest::qWait(500);
+        check(tonearm->property("lowered").toDouble()==0&&qAbs(tonearm->property("armAngle").toDouble()+4)<.01,"pausing lifts and parks the arm");
+        const bool motion=player.motion();player.setMotion(false);player.play();QTest::qWait(80);
+        check(tonearm->property("lowered").toDouble()==1,"reduced motion lowers the arm without animation");
+        player.pause();QTest::qWait(30);check(tonearm->property("lowered").toDouble()==0,"reduced motion parks the arm immediately");
+        player.setMotion(motion);player.seek(vinylPosition);QTest::qWait(150);
+        window->setProperty("discFlipped",true);QTest::qWait(400);
+        check(!tonearm->isVisible(),"reverse view hides the tonearm and preserves its content");
+        window->setProperty("discFlipped",false);QTest::qWait(400);
+        const auto shaftPoint=shaft->mapToScene(QPointF(0,140)).toPoint();
+        QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,shaftPoint);QTest::qWait(400);
+        check(window->property("discFlipped").toBool(),"tonearm decoration does not intercept disc gestures");
+        window->setProperty("discFlipped",false);QTest::qWait(400);
+    }
+    capture("11-vinyl-front");
     QTest::mouseMove(window,QPoint(265,185)); QTest::qWait(100);
     QTest::mouseDClick(window, Qt::LeftButton, Qt::NoModifier, QPoint(265,185));
     check(waitFor([&]{return window->property("discFlipped").toBool();}), "double-click flips the CD without playing audio");
@@ -654,7 +749,7 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         auto *duration=findItem(window->contentItem(), "albumDuration"+QString::number(row));
         check(number && title && duration && number->x()+number->width()<=title->x() && title->x()+title->width()<duration->x(), "album track columns have non-overlapping bounds");
     }
-    capture("02-disc-back");
+    capture("02-disc-back");capture("11-vinyl-reverse");
     click("lyricsViewButton");
     check(waitFor([&]{return !lyrics.loading() && lyrics.lines().size()==6;}), "lyrics toggle loads a matching local LRC file");
     player.seek(5500);check(waitFor([&]{return lyrics.currentIndex()==1;}), "timed lyrics follow seeking");
@@ -678,7 +773,7 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     testKeyClick(window,Qt::Key_Down);QTest::qWait(100);
     check(!lyricList->property("following").toBool() && player.volume()==lyricsVolume, "manual lyric browsing pauses following without adjusting volume");
     click("followLyricsButton");check(lyricList->property("following").toBool(), "follow control returns to the current lyric");
-    player.setMiniMode(true);QTest::qWait(400);capture("02-mini-lyrics");
+    player.setMiniMode(true);QTest::qWait(400);capture("02-mini-lyrics");capture("11-vinyl-mini-lyrics");
     check(window->width()==300 && lyrics.active(), "lyrics remain readable and active in Mini mode");
     click("lyricHit1");check(waitFor([&]{return qAbs(player.position()-5000)<200;}), "timed lyric clicks work at Mini mode scale");
     player.setMiniMode(false);QTest::qWait(200);
@@ -707,6 +802,28 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     testKeyClick(window, Qt::Key_Return);
     check(waitFor([&]{return player.currentIndex()==1;}), "Enter on filtered queue selects the original track index");
     player.pause();
+    // Exercise Quick jump through real keyboard/mouse input and the audio backend.
+    QMetaObject::invokeMethod(window,"closeQueueSearch");player.select(0,false);player.pause();
+    window->contentItem()->forceActiveFocus();testKeyClick(window,Qt::Key_K,Qt::ControlModifier);QTest::qWait(250);
+    auto *localJump=window->findChild<QObject *>("quickJump");
+    auto *localJumpSearch=findItem(window->contentItem(),"quickJumpSearch");
+    check(localJump&&localJump->property("visible").toBool()&&localJumpSearch&&localJumpSearch->hasActiveFocus(),"local Ctrl+K opens and focuses Quick jump");
+    for(char ch:QByteArray("second"))testKeyClick(window,ch);
+    check(localJump->property("query").toString()=="second","local Quick jump receives typed song search without invoking player shortcuts");
+    testKeyClick(window,Qt::Key_Return);
+    check(waitFor([&]{return player.currentIndex()==1&&player.playing()&&!localJump->property("visible").toBool();}),"local Quick jump Enter selects and actually starts audio playback");
+    player.pause();player.setMiniMode(true);QTest::qWait(250);
+    QMetaObject::invokeMethod(window,"openQuickJump");QTest::qWait(200);localJump->setProperty("query","First Light");QTest::qWait(100);click("quickJumpRow0");
+    check(waitFor([&]{return player.currentIndex()==0&&player.playing();})&&player.miniMode(),"local Mini Quick jump click plays the selected song without expanding");
+    player.pause();player.setMiniMode(false);QTest::qWait(250);
+    QMetaObject::invokeMethod(window,"openQuickJump");QTest::qWait(200);localJump->setProperty("query","second");
+    player.move(1,0);QTest::qWait(100);testKeyClick(window,Qt::Key_Return);
+    check(localJump->property("visible").toBool()&&!localJump->property("notice").toString().isEmpty()&&!player.playing()&&player.title()=="First Light","local Quick jump refuses a result whose queue position has changed");
+    QMetaObject::invokeMethod(localJump,"close");QTest::qWait(200);player.move(0,1);player.select(1,false);player.pause();
+    QMetaObject::invokeMethod(window,"openQueueSearch");QTest::qWait(150);
+    player.setVinyl(false);QTest::qWait(150);
+    check(!window->property("vinyl").toBool(),"switching back to CD restores the original renderer");
+    check(!findItem(window->contentItem(),"vinylTonearm"),"switching to CD releases tonearm geometry");
     capture("02-queue-search");
     search->setProperty("text", "no-such-track"); QTest::qWait(100);
     check(list->property("count").toInt()==0, "unmatched search shows an empty result set");
@@ -766,6 +883,9 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     };
     check(!player.miniOnTop() && pinMatches(false), "Mini pin defaults off");
     click("menuButton"); QTest::qWait(200); click("preferencesAction"); QTest::qWait(250);
+    click("vinylStyleButton");check(player.vinyl(),"preferences selects Vinyl");click("vinylStyleButton");
+    check(player.vinyl()&&findItem(window->contentItem(),"vinylStyleButton")->property("checked").toBool(),"selected appearance cannot be unchecked");
+    capture("11-vinyl-settings");click("cdStyleButton");check(!player.vinyl(),"preferences restores CD");
     auto *pinToggle = findItem(window->contentItem(), "miniPinToggle");
     check(pinToggle && pinToggle->mapToScene(QPointF()).y() >= 0, "Mini pin toggle fits inside preferences");
     if (!captures.isEmpty()) window->grabWindow().save(captures+"/03-pin-settings.png");
@@ -1005,6 +1125,7 @@ int main(int argc, char **argv) {
     Lyrics lyrics(&player, &cider);
     Library library(&cider);
     MusicActions musicActions(&cider);
+    Listening listening(&cider);
     DiscPresentation presentation;
     Native native;
     const qint64 backendReady = startup.elapsed();
@@ -1023,6 +1144,7 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("cider", &cider);
     engine.rootContext()->setContextProperty("library", &library);
     engine.rootContext()->setContextProperty("musicActions", &musicActions);
+    engine.rootContext()->setContextProperty("listening", &listening);
     engine.rootContext()->setContextProperty("testMode", test);
     qint64 firstFrame = -1;
     int frames = 0;
@@ -1078,7 +1200,15 @@ int main(int argc, char **argv) {
     else if (parser.isSet("inspect-library")) QTimer::singleShot(650, &app, [&] {
         int failures=0;
         auto check=[&](bool ok,const char *name) { std::cout<<(ok?"PASS ":"FAIL ")<<name<<std::endl;if(!ok)++failures; };
-        auto capture=[&](const QString &name) { if(parser.isSet("capture-dir")) { QDir().mkpath(parser.value("capture-dir"));QTest::qWait(900);check(window->grabWindow().save(parser.value("capture-dir")+"/"+name+".png"),"library capture saved"); } };
+        auto capture=[&](const QString &name) {
+            if(!parser.isSet("capture-dir"))return;
+            QDir().mkpath(parser.value("capture-dir"));QTest::qWait(900);
+            // Hidden Wayland workspaces can retain a surface at its old size.
+            // Capture the full current item tree, including the popup overlay.
+            auto grab=window->contentItem()->grabToImage();
+            const bool ready=grab&&waitFor([&]{if(grab->image().isNull())window->grabWindow();return !grab->image().isNull();},5000);
+            check(ready&&grab->image().save(parser.value("capture-dir")+"/"+name+".png"),"library capture saved");
+        };
         window->setProperty("useCider",true);window->setProperty("libraryOpen",true);
         library.setSection("albums");
         check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live Cider library albums load");
@@ -1099,7 +1229,7 @@ int main(int argc, char **argv) {
         if(!library.items().isEmpty()) {library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live playlist tracks load");capture("playlist-tracks");library.back();}
         library.setSection("search");
         auto *search=window->findChild<QQuickItem *>("librarySearchInput");
-        window->requestActivate();QTest::qWait(100);
+        focusTestWindow(window);QTest::qWait(100);
         if (search) { QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,search->mapToScene(QPointF(90,19)).toPoint());if(search->hasActiveFocus())for(char c:QByteArray("Daft Punk"))testKeyClick(window,c); }
         check(library.query()=="Daft Punk","live search field accepts keyboard input");
         check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live catalog song search works");capture("search-songs");
@@ -1107,6 +1237,121 @@ int main(int argc, char **argv) {
         library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live catalog album tracks load");capture("catalog-album");library.back();
         library.setKind("playlists");check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live catalog playlist search works");capture("search-playlists");
         library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live catalog playlist tracks load");
+        library.back();library.showArtist("Daft Punk");
+        check(waitFor([&]{return !library.busy();},15000)&&library.collection().value("type")=="artists","live Cider connection opens an artist page");
+        if(library.collection().value("type")=="artists") {
+            library.setArtistView("songs");
+            check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty()&&library.items().first().toMap().value("type")=="songs","live artist top songs work with the existing Cider token");capture("artist-top-songs");
+            if(!library.items().isEmpty()) {
+                library.prepareRadio(library.items().first().toMap());
+                check(waitFor([&]{return !library.radioBusy();},15000)&&library.radioError().isEmpty(),"live song radio availability resolves without playback");
+                std::function<QObject*(QObject*)> findMenu=[&](QObject *parent)->QObject* {
+                    if(parent->objectName()=="browserTrackMenu")return parent;
+                    for(auto *child:parent->children())if(auto *found=findMenu(child))return found;
+                    return nullptr;
+                };
+                if(auto *menu=findMenu(window)) {
+                    menu->setProperty("selection",library.items().first());menu->setProperty("x",24);menu->setProperty("y",220);
+                    QMetaObject::invokeMethod(menu,"open");waitFor([&]{return !library.radioBusy();},15000);capture("song-radio");QMetaObject::invokeMethod(menu,"close");
+                }
+            }
+            library.setArtistView("similar");
+            check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live similar artists resolve through Cider");capture("similar-artists");
+            library.setArtistView("albums");check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live artist Albums switch remains available");
+            // Exercise local pins only with an explicitly isolated settings file.
+            if(parser.isSet("config")) {
+                const auto artist=library.collection();const bool wasPinned=library.isPinned(artist);
+                if(!wasPinned)library.togglePin(artist);
+                library.back();library.setQuery("");waitFor([&]{return !library.busy();},15000);capture("pinned-artist");
+                int pin=-1;const auto pins=library.pins();for(int i=0;i<pins.size();++i)if(pins[i].toMap().value("path")==artist.value("path"))pin=i;
+                library.playPin(pin);
+                check(waitFor([&]{return !library.busy();},15000)&&library.collection().value("type")=="artists"&&library.artistView()=="songs","live artist pin opens Top songs");capture("pinned-artist-open");
+                library.setSection("releases");
+                check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live pinned artist releases load through batched Cider lookup");capture("pinned-releases");
+                if(!library.items().isEmpty()) { library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live release opens album tracks");library.back(); }
+                library.setSection("search");
+                if(!wasPinned)library.togglePin(artist);
+            }
+            library.back();
+        }
+        library.setKind("stations");library.setQuery("Chill");
+        check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty()&&library.items().first().toMap()["type"]=="stations","live station search works with the existing token");capture("stations");
+        library.setSection("songs");library.setNewestFirst(true);
+        check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recently added songs load");capture("recently-added-songs");
+        library.setSection("albums");check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recently added albums load");capture("recently-added-albums");
+        auto *audio=window->findChild<QObject *>("crossfadeMenu");
+        if(audio) { QMetaObject::invokeMethod(audio,"open");check(waitFor([&]{return !cider.audioBusy()&&!cider.crossfadeBusy();},15000),"live audio settings finish loading");capture("audio-settings");QMetaObject::invokeMethod(audio,"close"); }
+        window->setProperty("queueOpen",true);
+        check(waitFor([&]{return !cider.queueBusy()&&cider.queueReady();},15000),"live queue loads for cleanup preview");
+        QMetaObject::invokeMethod(window,"previewQueueCleanup",Q_ARG(QVariant,"upcoming"));
+        auto *cleanup=window->findChild<QObject *>("cleanupPopup");
+        check(cleanup&&cleanup->property("visible").toBool(),"live cleanup preview opens without removing songs");capture("cleanup-preview");
+        if(cleanup)QMetaObject::invokeMethod(cleanup,"close");
+        if(parser.isSet("config") && cider.queueReady() && !cider.queue().isEmpty()) {
+            window->setProperty("libraryOpen",true);library.setSection("sessions");
+            waitFor([&]{return !cider.queueBusy();},15000);
+            const bool saved=library.saveQueue("Spun interface check");check(saved,"live queue can be saved in isolated test storage");
+            if(saved) {
+                library.open(0);QTest::qWait(200);const auto snapshot=library.collection();const auto id=snapshot.value("id").toString();
+                std::function<QQuickItem *(QQuickItem *)> findMark=[&](QQuickItem *parent)->QQuickItem * {
+                    if(parent->objectName()=="alreadyQueued0")return parent;
+                    for(auto *child:parent->childItems())if(auto *found=findMark(child))return found;
+                    return nullptr;
+                };
+                auto *mark=findMark(window->contentItem());
+                check(mark && mark->isVisible(),"live current song is marked Already queued in the saved queue");capture("already-queued");
+                check(library.renameSavedQueue(snapshot,"Evening mix"),"isolated saved queue rename works with live metadata");
+                check(library.canUndoSavedQueue()&&library.undoSavedQueue()&&library.collection()["title"]==snapshot["title"],"native saved queue Undo restores a local name without changing playback");
+                library.renameSavedQueue(library.collection(),"Evening mix");
+                if(library.items().size()>1) {
+                    check(library.editSavedTrack(0,1,false),"isolated saved queue reorders without changing Cider");
+                    check(library.editSavedTrack(0,0,true),"isolated saved queue removes a local reference");
+                }
+                capture("edited-saved-queue");
+                const auto localTracks=library.savedTracks(id);
+                if(!localTracks.isEmpty()) {
+                    QMetaObject::invokeMethod(window,"openSavedQueuePicker",Q_ARG(QVariant,QVariant(localTracks)),Q_ARG(QVariant,QVariant::fromValue(&library)));QTest::qWait(250);
+                    auto *picker=window->findChild<QObject *>("savedQueuePicker");
+                    check(picker&&picker->property("visible").toBool(),"native saved queue picker opens with live song metadata");
+                    if(picker) {
+                        picker->setProperty("selected",library.savedQueueChoices()["rows"].toList().first());
+                        auto centered=[&] { return qAbs(picker->property("x").toDouble()+picker->property("width").toDouble()/2-window->width()/2.)<1 && qAbs(picker->property("y").toDouble()+picker->property("height").toDouble()/2-window->height()/2.)<1; };
+                        check(centered(),"native saved picker is centered in the expanded player");capture("append-saved-queue");
+                        window->setProperty("libraryOpen",false);QTest::qWait(250);
+                        check(centered(),"native saved picker remains centered after the sidebar closes");capture("append-saved-queue-compact");
+                        const auto before=library.savedTracks(id);QMetaObject::invokeMethod(picker,"submit");
+                        waitFor([&]{return !picker->property("visible").toBool();},2000);
+                        check(!picker->property("visible").toBool()&&library.savedTracks(id)==before,"native picker skips duplicates without changing the isolated snapshot");
+                    }
+                }
+                window->setProperty("queueOpen",true);waitFor([&]{return !cider.queueBusy();},15000);
+                QMetaObject::invokeMethod(window,"selectUpcomingQueue");QTest::qWait(150);
+                check(window->property("queueSelectionCount").toInt()==qMax(0,cider.queue().size()-cider.currentIndex()-1),"native queue selection excludes history and the current song");capture("queue-selection");
+                QMetaObject::invokeMethod(window,"clearQueueSelection");
+                QMetaObject::invokeMethod(window,"openQuickJump");QTest::qWait(300);
+                auto *jump=window->findChild<QObject *>("quickJump");
+                check(jump&&jump->property("visible").toBool()&&waitFor([&]{return !jump->property("waitingForQueue").toBool();},10000),"native Quick jump loads pins, saved queues and current queue");
+                if(jump) {
+                    jump->setProperty("query","Evening mix");capture("quick-jump");
+                    QMetaObject::invokeMethod(jump,"activate",Q_ARG(QVariant,QVariant(QVariantMap{{"kind","saved"},{"key",id}})));QTest::qWait(250);
+                    check(window->property("libraryOpen").toBool()&&library.collection()["id"]==id,"native Quick jump opens the chosen saved queue");
+                }
+                library.deleteSavedQueue(id);
+            }
+        }
+        player.setMiniMode(true);QTest::qWait(250);
+        auto *next=window->findChild<QQuickItem *>("miniNext");
+        if(next&&next->isEnabled()) {
+            QTest::mouseMove(window,next->mapToScene(QPointF(20,20)).toPoint());QTest::qWait(850);
+            auto *peek=next->findChild<QObject *>("nextTrackTip");
+            check(peek&&peek->property("visible").toBool()&&waitFor([&]{return !cider.queueBusy();},10000),"native Mini hover opens its next-song preview");capture("mini-next-preview");
+            QTest::mouseMove(window,QPoint(2,2));QTest::qWait(200);
+        }
+        QMetaObject::invokeMethod(window,"openQuickJump");QTest::qWait(300);capture("mini-quick-jump");
+        auto *miniJump=window->findChild<QObject *>("quickJump");
+        check(miniJump&&miniJump->property("visible").toBool()&&miniJump->property("width").toDouble()<=window->width(),"native Quick jump fits Mini mode");
+        if(miniJump)QMetaObject::invokeMethod(miniJump,"close");
+        check(waitFor([&]{return cider.liveConnected();},8000),"live Cider change stream is connected");
         library.setActive(false);std::cout<<"RESULT "<<failures<<" failures"<<std::endl;app.exit(failures?1:0);
     });
     else if (parser.isSet("verify-cider") || parser.isSet("inspect-cider")) QTimer::singleShot(600, &app, [&] {

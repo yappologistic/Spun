@@ -12,11 +12,12 @@ MenuItem {
     background: Rectangle {
         radius: SpunStyle.rowRadius
         color: "transparent"
+        border.width: entry.visualFocus ? 2 : 0; border.color: entry.app.accent
         SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: entry.app.ink; enabled: entry.enabled; pressed: entry.down; focused: entry.highlighted; hovered: entry.hovered }
     }
     contentItem: Item {
-        opacity: entry.enabled ? 1 : .4
-        Glyph { x: 12; anchors.verticalCenter: parent.verticalCenter; name: entry.glyphName; ink: entry.highlighted ? entry.app.accent : entry.app.mutedInk }
+        opacity: entry.enabled ? 1 : SpunStyle.disabledOpacity
+        Glyph { visible: entry.glyphName.length > 0; x: 12; anchors.verticalCenter: parent.verticalCenter; name: entry.glyphName; ink: entry.highlighted ? entry.app.accent : entry.app.mutedInk }
         SpunText { x: 44; anchors.verticalCenter: parent.verticalCenter; width: parent.width - x - 12 - trailing.width - 8; text: entry.text; font: entry.font; color: entry.app.ink; elide: Text.ElideRight }
         Item {
             id: trailing

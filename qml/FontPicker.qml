@@ -18,7 +18,7 @@ Popup {
     font.family: SpunStyle.family
     background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
     enter: SpunPopupEnter {}
-    exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit } }
+    exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
     readonly property var matches: {
         const query = search.text.trim().toLocaleLowerCase()
         return typography.families.filter(family => family.toLocaleLowerCase().includes(query))
@@ -27,7 +27,7 @@ Popup {
     onAboutToShow: { typography.loadFamilies(); search.text = ""; fonts.currentIndex = -1 }
     onOpened: search.forceActiveFocus()
     contentItem: Item {
-        SpunText { x: 12; y: 10; text: "Font"; color: picker.app.ink; font.pixelSize: SpunStyle.heading }
+        SpunText { x: 12; y: 10; text: "Font"; color: picker.app.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
         IconButton { objectName: "closeFontPicker"; anchors.right: parent.right; glyphName: "close"; tip: "Close font picker"; ink: picker.app.ink; onClicked: picker.close() }
         SpunSearchField {
             id: search
@@ -45,11 +45,14 @@ Popup {
             objectName: "systemFontChoice"
             y: search.y + search.height + 8; width: parent.width; height: SpunStyle.target
             text: "System default"
+            Accessible.role: Accessible.RadioButton
+            Accessible.checkable: true; Accessible.checked: typography.selectedFamily.length === 0
             font.family: SpunStyle.family; font.pixelSize: SpunStyle.body
             onClicked: picker.choose("")
             contentItem: SpunText { text: systemChoice.text; font: systemChoice.font; color: picker.app.ink; verticalAlignment: Text.AlignVCenter; rightPadding: 32; elide: Text.ElideRight }
             background: Rectangle {
                 radius: SpunStyle.rowRadius; color: typography.selectedFamily.length === 0 ? SpunStyle.selected : "transparent"
+                border.width: systemChoice.visualFocus ? 2 : 0; border.color: picker.app.accent
                 SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: picker.app.ink; hovered: systemChoice.hovered; pressed: systemChoice.down; focused: systemChoice.visualFocus }
             }
             Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; visible: typography.selectedFamily.length === 0; name: "check"; ink: picker.app.accent }
@@ -88,10 +91,13 @@ Popup {
                 readonly property bool selected: typography.selectedFamily === modelData
                 font.family: SpunStyle.family; font.pixelSize: SpunStyle.body
                 Accessible.name: modelData
+                Accessible.role: Accessible.RadioButton
+                Accessible.checkable: true; Accessible.checked: selected
                 onClicked: picker.choose(modelData)
                 contentItem: SpunText { text: row.text; color: picker.app.ink; font: row.font; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter; rightPadding: 32 }
                 background: Rectangle {
                     radius: SpunStyle.rowRadius; color: row.selected ? SpunStyle.selected : "transparent"
+                    border.width: row.highlighted || row.visualFocus ? 2 : 0; border.color: picker.app.accent
                     SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: picker.app.ink; hovered: row.hovered; pressed: row.down; focused: row.highlighted || row.visualFocus }
                 }
                 Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; visible: row.selected; name: "check"; ink: picker.app.accent }

@@ -16,23 +16,25 @@ Switch {
     }
     indicator: Rectangle {
         x: control.width - width - 12; anchors.verticalCenter: parent.verticalCenter
-        width: 40; height: 24; radius: 12
+        objectName: "switchTrack"
+        width: 52; height: 32; radius: 16
         color: control.checked ? control.app.accent : control.app.inset
         border.width: control.checked ? 0 : 2
         border.color: control.app.mutedInk
-        opacity: control.enabled ? 1 : .4
-        Behavior on color { ColorAnimation { duration: SpunStyle.feedback } }
+        opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
+        Behavior on color { ColorAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         Rectangle {
-            SpunSpring { id: thumbPosition; targetValue: control.checked ? 19 : 5; epsilon: .1 }
-            SpunSpring { id: thumbSize; targetValue: control.checked ? 18 : 14; epsilon: .1 }
-            x: thumbPosition.value; anchors.verticalCenter: parent.verticalCenter
+            SpunSpring { id: thumbPosition; targetValue: control.checked ? 36 : 16; epsilon: .1 }
+            SpunSpring { id: thumbSize; targetValue: control.down ? 28 : control.checked ? 24 : 16; epsilon: .1 }
+            objectName: "switchThumb"
+            x: thumbPosition.value - width / 2; anchors.verticalCenter: parent.verticalCenter
             width: thumbSize.value; height: width; radius: width / 2
             color: control.checked ? theme.colors.onAccent : control.app.mutedInk
         }
     }
     contentItem: Item {
-        opacity: control.enabled ? 1 : .4
+        opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
         Glyph { x: 12; anchors.verticalCenter: parent.verticalCenter; name: control.glyphName; ink: control.app.mutedInk }
-        SpunText { x: 44; width: control.width - x - 64; anchors.verticalCenter: parent.verticalCenter; text: control.text; font: control.font; color: control.app.ink; elide: Text.ElideRight }
+        SpunText { x: 44; width: control.width - x - 76; anchors.verticalCenter: parent.verticalCenter; text: control.text; font: control.font; color: control.app.ink; elide: Text.ElideRight }
     }
 }

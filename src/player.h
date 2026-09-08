@@ -39,6 +39,7 @@ class Player : public QObject {
     Q_PROPERTY(bool shuffle READ shuffle WRITE setShuffle NOTIFY settingsChanged)
     Q_PROPERTY(int repeatMode READ repeatMode WRITE setRepeatMode NOTIFY settingsChanged)
     Q_PROPERTY(bool light READ light WRITE setLight NOTIFY settingsChanged)
+    Q_PROPERTY(bool vinyl READ vinyl WRITE setVinyl NOTIFY vinylChanged)
     Q_PROPERTY(bool motion READ motion WRITE setMotion NOTIFY settingsChanged)
     Q_PROPERTY(bool ciderAutoStart READ ciderAutoStart WRITE setCiderAutoStart NOTIFY settingsChanged)
     Q_PROPERTY(bool miniOnTop READ miniOnTop WRITE setMiniOnTop NOTIFY miniOnTopChanged)
@@ -68,6 +69,8 @@ public:
     bool shuffle() const { return m_shuffle; }
     int repeatMode() const { return m_repeat; }
     bool light() const { return m_light; }
+    bool vinyl() const { return m_vinyl; }
+    void setVinyl(bool value);
     bool motion() const { return m_motion; }
     bool ciderAutoStart() const { return m_ciderAutoStart; }
     void setCiderAutoStart(bool value);
@@ -106,6 +109,7 @@ public:
     static bool supported(const QString &path);
     static Track readTrack(const QString &path);
 signals:
+    void vinylChanged();
     void discDetailsChanged();
     void trackChanged();
     void artworkChanged();
@@ -142,6 +146,7 @@ private:
     QSet<QString> m_shuffleVisited;
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
+    bool m_vinyl = false;
     bool m_shuffle = false, m_light = false, m_motion = true, m_busy = false, m_backgroundBlur = false, m_miniMode = false, m_miniOnTop = false;
     int m_repeat = 0;
     qint64 m_restorePosition = -1;
