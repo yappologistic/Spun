@@ -3,7 +3,7 @@
 <p align="center">A CD and vinyl music player for Linux.</p>
 
 <p align="center">
-  <img src="assets/screenshots/spun-player.png" alt="Spun in vinyl mode with a gold tonearm and the Cider queue alongside it" width="1000">
+  <img src="assets/screenshots/spun-vinyl.png" alt="Spun in vinyl mode with a gold tonearm and the Cider queue alongside it" width="1000">
 </p>
 
 <p align="center">
