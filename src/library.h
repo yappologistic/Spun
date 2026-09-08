@@ -130,6 +130,10 @@ private:
     void continueTail();
     void radioRequest(const QString &endpoint, const QJsonObject &body, std::function<void(QJsonObject)> done);
     void resolveRadio(const QVariantMap &song);
+    void startStation(const QVariantMap &station, bool radio);
+    void verifyStation(const QVariantMap &station, bool radio, int token);
+    void finishStation(bool radio, const QString &error={});
+    QElapsedTimer m_stationClock;
     QPointer<QNetworkReply> m_radioReply;
     int m_radioGeneration=0;
     bool m_radioBusy=false, m_radioCurrent=false, m_radioStarting=false;

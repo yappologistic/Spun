@@ -1051,7 +1051,7 @@ int main(int argc, char **argv) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
         if (option == "--self-test" || option == "--test-library" || option == "--smoke-live"
-            || option == "--verify-cider" || option == "--inspect-cider" || option == "--inspect-library") {
+            || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
             execv(diagnostics.constData(), argv);
@@ -1080,6 +1080,7 @@ int main(int argc, char **argv) {
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
     parser.addOption({"verify-cider", "Verify a live Cider connection, briefly testing and restoring playback"});
+    parser.addOption({"verify-cider-writes", "Exercise live Cider controls, reversible queue/audio edits and start song radio"});
     parser.addOption({"inspect-library", "Verify Cider music browsing without changing playback"});
     parser.addOption({"inspect-cider", "Verify live Cider metadata and artwork without changing playback"});
     parser.addOption({"capture-dir", "Save test captures", "directory"});
@@ -1223,7 +1224,13 @@ int main(int argc, char **argv) {
         }
         int first=library.items().size();
         if(library.hasMore()) { library.more();check(waitFor([&]{return !library.busy();},15000)&&library.items().size()>first,"live library pagination appends albums"); }
-        library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live library album tracks load");capture("album-tracks");
+        const bool firstAlbumEmpty=library.items().first().toMap().value("trackCount",-1).toInt()==0;
+        library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&(firstAlbumEmpty?library.items().isEmpty():!library.items().isEmpty()),firstAlbumEmpty?"live empty library album shows a normal empty state":"live library album tracks load");capture("album-tracks");
+        if(firstAlbumEmpty) {
+            check(!library.collection().value("playable").toBool(),"empty library album does not offer unavailable playback");
+            library.back();int populated=-1;for(int i=0;i<library.items().size();++i)if(library.items()[i].toMap().value("trackCount").toInt()>0){populated=i;break;}
+            if(populated>=0) {library.open(populated);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live populated library album tracks load");capture("populated-album-tracks");}
+        }
         library.back();library.setSection("playlists");
         check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live Cider playlists load");capture("playlists");
         if(!library.items().isEmpty()) {library.open(0);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live playlist tracks load");capture("playlist-tracks");library.back();}
@@ -1258,6 +1265,21 @@ int main(int argc, char **argv) {
             library.setArtistView("similar");
             check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&!library.items().isEmpty(),"live similar artists resolve through Cider");capture("similar-artists");
             library.setArtistView("albums");check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live artist Albums switch remains available");
+            for(const auto &category:QStringList{"full-albums","singles","live-albums"}) {
+                library.setDiscography(category);
+                check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),qPrintable("live discography category loads: "+category));
+                if(library.hasMore()) {
+                    const auto count=library.items().size();library.more();
+                    check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&library.items().size()>count,"live filtered discography pagination appends releases");
+                }
+                if(!library.items().isEmpty()) {
+                    library.open(0);
+                    check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live filtered release opens its tracks");
+                    library.back();check(library.discography()==category,"live Back restores the discography category");
+                }
+                capture("discography-"+category);
+            }
+            library.setDiscography("all");waitFor([&]{return !library.busy();},15000);
             // Exercise local pins only with an explicitly isolated settings file.
             if(parser.isSet("config")) {
                 const auto artist=library.collection();const bool wasPinned=library.isPinned(artist);
@@ -1279,6 +1301,23 @@ int main(int argc, char **argv) {
         library.setSection("songs");library.setNewestFirst(true);
         check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recently added songs load");capture("recently-added-songs");
         library.setSection("albums");check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recently added albums load");capture("recently-added-albums");
+        library.setSection("recent");
+        check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recently played history loads");
+        library.setSection("for-you");
+        check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live For You recommendations load through Spun");capture("for-you");
+        if(library.hasMore()) {
+            const auto count=library.items().size();library.more();
+            check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty()&&library.items().size()>=count,"live For You pagination preserves existing recommendations");
+        }
+        for(int i=0;i<library.items().size();++i)if(library.items()[i].toMap().value("type")!="stations") {
+            library.open(i);check(waitFor([&]{return !library.busy();},15000)&&library.error().isEmpty(),"live recommended collection opens its tracks");
+            library.back();check(library.section()=="for-you","live Back restores For You");break;
+        }
+        musicActions.setObserving(true);
+        check(waitFor([&]{return musicActions.ready()||!musicActions.error().isEmpty();},15000)&&musicActions.ready(),"live song favorite, dislike and library status are readable");
+        musicActions.setObserving(false);
+        cider.refreshAudioQuality();
+        check(waitFor([&]{return !cider.qualityBusy();},15000)&&!cider.audioQuality().isEmpty(),"live audio quality reports details or an explicit unavailable state");
         auto *audio=window->findChild<QObject *>("crossfadeMenu");
         if(audio) { QMetaObject::invokeMethod(audio,"open");check(waitFor([&]{return !cider.audioBusy()&&!cider.crossfadeBusy();},15000),"live audio settings finish loading");capture("audio-settings");QMetaObject::invokeMethod(audio,"close"); }
         window->setProperty("queueOpen",true);
@@ -1288,6 +1327,14 @@ int main(int argc, char **argv) {
         check(cleanup&&cleanup->property("visible").toBool(),"live cleanup preview opens without removing songs");capture("cleanup-preview");
         if(cleanup)QMetaObject::invokeMethod(cleanup,"close");
         if(parser.isSet("config") && cider.queueReady() && !cider.queue().isEmpty()) {
+            listening.addBookmark();
+            check(waitFor([&]{return !listening.busy();},15000)&&!listening.bookmarks().isEmpty(),"live song bookmark saves in isolated storage");
+            for(const auto &bookmark:listening.bookmarks())listening.removeBookmark(bookmark.toMap().value("key").toString());
+            check(listening.bookmarks().isEmpty(),"live test bookmark can be removed locally");
+            listening.setRememberSession(true);
+            check(waitFor([&]{return !listening.session().isEmpty();},15000),"live session checkpoint saves without changing playback");
+            listening.setRememberSession(false);
+            check(listening.session().isEmpty(),"disabling isolated session recovery clears its checkpoint");
             window->setProperty("libraryOpen",true);library.setSection("sessions");
             waitFor([&]{return !cider.queueBusy();},15000);
             const bool saved=library.saveQueue("Spun interface check");check(saved,"live queue can be saved in isolated test storage");
@@ -1354,7 +1401,7 @@ int main(int argc, char **argv) {
         check(waitFor([&]{return cider.liveConnected();},8000),"live Cider change stream is connected");
         library.setActive(false);std::cout<<"RESULT "<<failures<<" failures"<<std::endl;app.exit(failures?1:0);
     });
-    else if (parser.isSet("verify-cider") || parser.isSet("inspect-cider")) QTimer::singleShot(600, &app, [&] {
+    else if (parser.isSet("verify-cider") || parser.isSet("verify-cider-writes") || parser.isSet("inspect-cider")) QTimer::singleShot(600, &app, [&] {
         int failures = 0;
         auto check = [&](bool ok, const char *name) { std::cout << (ok ? "PASS " : "FAIL ") << name << std::endl; if (!ok) ++failures; };
         check(waitFor([&] { return cider.available() && cider.count() > 0; }), "live Cider track detected");
@@ -1362,6 +1409,7 @@ int main(int argc, char **argv) {
         window->setProperty("useCider", true);
         const bool wasPlaying = cider.playing();
         const qint64 oldPosition = cider.position();
+        check(waitFor([&]{return cider.volumeReady();},8000),"Cider normalized volume is ready");
         const double oldVolume = cider.volume();
         const int oldRepeat = cider.repeatMode();
         check(waitFor([&] { return !cider.artwork().isNull(); }, 15000), "Cider artwork decoded onto CD");
@@ -1377,7 +1425,11 @@ int main(int argc, char **argv) {
         if (cider.canSeek()) {
             const auto target = qMin<qint64>(oldPosition + 3000, cider.duration()-1000);
             cider.seek(target);
-            check(waitFor([&] { return qAbs(cider.position()-target) < 700; }), "Cider seek control");
+            const bool sought=waitFor([&] { return qAbs(cider.position()-target) < 700; });
+            check(sought, "Cider seek control");
+            if(!sought)std::cout<<"SEEK target="<<target<<" observed="<<cider.position()<<" duration="<<cider.duration()<<" playing="<<cider.playing()<<std::endl;
+            QTest::qWait(2200);
+            check(qAbs(cider.position()-target)<700,"confirmed seek survives desktop position polling");
             cider.seek(oldPosition);
             check(waitFor([&] { return qAbs(cider.position()-oldPosition) < 700; }), "Cider position restored");
         }
@@ -1388,6 +1440,45 @@ int main(int argc, char **argv) {
         cider.setVolume(oldVolume);
         check(waitFor([&] { return qAbs(cider.volume()-oldVolume) < .01; }), "Cider volume restored");
         if (wasPlaying) { cider.play(); waitFor([&] { return cider.playing(); }); }
+        }
+        if(parser.isSet("verify-cider-writes")) {
+            window->setProperty("queueOpen",true);
+            check(waitFor([&]{return !cider.queueBusy()&&cider.queueReady();},15000),"live write checks load the current queue");
+            const auto originalQueue=cider.queue();const int originalIndex=cider.currentIndex();
+            const auto keys=[](const QVariantList &rows) {QStringList result;for(const auto &value:rows){const auto row=value.toMap();result.append(row["type"].toString()+":"+row["id"].toString());}return result;};
+            const auto originalKeys=keys(originalQueue);
+            auto idle=[&] {return waitFor([&]{return !cider.controlBusy()&&!cider.queueBusy();},15000);};
+            if(originalIndex>=0&&originalIndex<originalQueue.size()) {
+                cider.insertQueue({originalQueue[originalIndex]},originalQueue.size(),cider.queueRevision());
+                check(idle()&&keys(cider.queue())==originalKeys+QStringList{originalKeys[originalIndex]},"live insertion places a duplicate at the requested slot even before a radio tail");
+                if(keys(cider.queue())==originalKeys+QStringList{originalKeys[originalIndex]}) {
+                    cider.removeQueue(originalQueue.size(),cider.queueRevision());
+                    check(idle()&&keys(cider.queue())==originalKeys&&cider.canUndoQueue(),"live DELETE removes the test occurrence and offers Undo");
+                    if(keys(cider.queue())==originalKeys&&cider.canUndoQueue()) {
+                        cider.undoQueueRemoval();check(idle()&&keys(cider.queue())==originalKeys+QStringList{originalKeys[originalIndex]},"live Undo restores the test occurrence to its original position");
+                    }
+                }
+                // Remove only an identifiable extra test occurrence, including a
+                // partially completed insertion; never replace the user's queue.
+                auto actual=keys(cider.queue());
+                for(int i=actual.size()-1;i>=0;--i) {auto without=actual;without.removeAt(i);if(i!=cider.currentIndex()&&without==originalKeys) {cider.removeQueue(i,cider.queueRevision());idle();break;}}
+                check(keys(cider.queue())==originalKeys&&cider.currentIndex()==originalIndex,"live queue write checks restore the original order and current occurrence");
+            }
+            cider.refreshAudioOptions();waitFor([&]{return !cider.audioBusy();},15000);
+            for(const auto &key:QStringList{"automix","listeningMode"})if(cider.audioOptions().contains(key)) {
+                const auto original=cider.audioOptions()[key];
+                const QVariant target=key=="automix"?QVariant(!original.toBool()):QVariant(original=="gaming"?"unwind":"gaming");
+                cider.setAudioOption(key,target);
+                check(waitFor([&]{return !cider.audioBusy();},15000)&&cider.audioOptions()[key]==target,qPrintable("live Spun audio action confirms "+key));
+                cider.refreshAudioOptions();waitFor([&]{return !cider.audioBusy();},15000);cider.setAudioOption(key,original);
+                check(waitFor([&]{return !cider.audioBusy();},15000)&&cider.audioOptions()[key]==original,qPrintable("live Spun audio action restores "+key));
+            }
+            library.prepareRadio({},true);
+            check(waitFor([&]{return !library.radioBusy();},15000)&&library.radioAvailable(),"live current song resolves a station before playback");
+            if(library.radioAvailable()) {
+                library.playRadio();
+                check(waitFor([&]{return !library.radioBusy();},20000)&&library.radioError().isEmpty(),"live Spun radio action verifies that its requested station is playing");
+            }
         }
         if (parser.isSet("capture-dir")) {
             QDir().mkpath(parser.value("capture-dir")); QTest::qWait(600);

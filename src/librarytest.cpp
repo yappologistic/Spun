@@ -42,10 +42,13 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     bool playedShuffle=false, transactionQueue=false, changeQueueOnRead=false, changeAfterAppend=false; int queueWrites=0,qualityReads=0;
     QJsonObject quality{{"flavorLabel","AAC 256kbps"},{"deviceAudioConfig",QJsonObject{{"sampleRate",48000},{"channelCount",2}}}};
     QString playedType, playedId, playedPath, lastTerm, lastBrowsePath;
+    QString stationContext;bool rejectStation=false,unconfirmedStation=false,stationPlaying=true;int stationChecks=0,stationDelayChecks=0;
     QJsonArray fixtureQueue; int fixturePosition=-1;
+    bool radioTailInsertion=false,noRelatedTracks=false,otherTrackError=false;
     int jumps=0,jumpedIndex=-1,jumpDelay=0; bool rejectJump=false;
     int queueReads=0,queueDelay=0;int deleteWrites=0,rejectDeleteAt=-1; QList<int> deletedIndices;
     bool changeAfterDelete=false,advanceAfterDelete=false,failAfterDelete=false,failQueueRead=false;
+    double normalizedVolume=.55;int volumeWrites=0,volumeReads=0;bool rejectVolume=false,seekFixture=false;
     bool automix=false, audioUnavailable=false, rejectAudio=false; QString listeningMode="off"; int audioReads=0,audioWrites=0; QJsonObject audioPatch;
     QString shareUrl="https://music.apple.com/ca/album/example/100?i=123&ls=1"; int shareDelay=0;
     const auto originalClipboard=QGuiApplication::clipboard()->text();
@@ -73,11 +76,21 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
             auto body=QJsonDocument::fromJson(request.mid(split+4,length)).object();
             const QString endpoint=QString::fromUtf8(request.split(' ').value(1));
             QJsonObject response{{"data",QJsonObject{}}}; int code=200, delay=0;
-            if(endpoint=="/api/v2/auth/request") {
+            const bool mutation=request.startsWith("POST ")||request.startsWith("PUT ")||request.startsWith("PATCH ")||request.startsWith("DELETE ");
+            if(mutation && request.left(split).toLower().contains("content-type: application/json") && length==0)code=400;
+            else if(endpoint=="/api/v2/auth/request") {
                 ++authRequests; authBody=body; code=authCode; delay=authDelay;
                 response["data"]=malformedAuth?QJsonObject{}:QJsonObject{{"token","test-library-token"},{"scopes",QJsonArray{"playback","queue","library","audio"}}};
             } else if(!request.left(split).contains("test-library-token"))code=403;
             else if(endpoint=="/api/v2/client/info") { ++probes; if(rejectProbe)code=401; response["data"]=QJsonObject{{"version","4.0.9"}}; }
+            else if(endpoint=="/api/v2/playback/play-href") {
+                ++plays;playedPath=endpoint;playedId=body["href"].toString().section('/',-1);playedType="stations";stationChecks=0;
+                if(rejectStation)code=403;else stationContext=playedId;
+            }
+            else if(endpoint=="/api/v2/queue/position") {response["data"]=QJsonObject{{"position",0},{"total",1}};}
+            else if(endpoint=="/api/v2/queue?offset=0&limit=1") {
+                ++stationChecks;response["data"]=QJsonObject{{"items",QJsonArray{QJsonObject{{"containerContext",QJsonObject{{"id",unconfirmedStation||stationChecks<=stationDelayChecks?"different":stationContext}}}}}},{"position",0}};
+            }
             else if(endpoint.startsWith("/api/v2/queue?")) { ++queueReads;delay=queueDelay;if(failQueueRead)code=500; if(changeQueueOnRead) { changeQueueOnRead=false;fixtureQueue.append(QJsonObject{{"track",resource("external","songs","External")}}); } response["data"]=QJsonObject{{"items",fixtureQueue},{"position",fixturePosition}}; response["meta"]=QJsonObject{{"total",fixtureQueue.size()}}; }
             else if(endpoint=="/api/v2/queue/jump") {
                 ++jumps; jumpedIndex=body["index"].toInt(-1); delay=jumpDelay;
@@ -91,7 +104,8 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
                 attrs["playParams"]=QJsonObject{{"id",wrongSong?"wrong":snapshotId},{"kind","song"},{"isLibrary",snapshotType=="library-songs"}};
                 response["data"]=QJsonObject{{"state","playing"},{"nowPlaying",attrs},{"time",QJsonObject{{"currentTime",snapshotPosition},{"duration",32.0}}}};
             }
-            else if(listeningFixture && endpoint=="/api/v2/playback/seek") {++seekWrites;if(!ignoreSeek)snapshotPosition=body["position"].toDouble();}
+            else if((listeningFixture || seekFixture) && endpoint=="/api/v2/playback/seek") {++seekWrites;if(!ignoreSeek)snapshotPosition=body["position"].toDouble();}
+            else if(endpoint=="/api/v2/playback") {response["data"]=QJsonObject{{"state",stationPlaying?"playing":"paused"},{"time",QJsonObject{{"currentTime",snapshotPosition}}}};}
             else if(endpoint=="/api/v2/playback/audio-quality") { ++qualityReads;response["data"]=quality; }
             else if(transactionQueue && (endpoint.startsWith("/api/v2/queue/items/") || endpoint=="/api/v2/queue/move")) {
                 ++queueWrites;
@@ -115,9 +129,14 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
                 }
             }
             else if(endpoint=="/api/v2/playback/now-playing") { response["data"]=QJsonObject{{"url",shareUrl}};delay=shareDelay; }
+            else if(endpoint=="/api/v2/audio/volume") {
+                if(request.startsWith("PATCH")) { ++volumeWrites;if(rejectVolume)code=403;else normalizedVolume=body["volume"].toDouble(); }
+                else ++volumeReads;
+                response["data"]=QJsonObject{{"volume",normalizedVolume}};
+            }
             else if(endpoint=="/api/v2/audio/automix" || endpoint=="/api/v2/audio/listening-mode") {
                 if(request.startsWith("PATCH")) { ++audioWrites;audioPatch=body;
-                    if(rejectAudio)code=403;else if(endpoint.endsWith("automix"))automix=body["enabled"].toBool();else listeningMode=body["mode"].toString();
+                    if(rejectAudio)code=403;else if(endpoint.endsWith("automix"))automix=body["enabled"].toBool();else if(!QStringList{"off","game","antifatigue"}.contains(body["mode"].toString()))code=400;else listeningMode=body["mode"].toString();
                 } else ++audioReads;
                 if(audioUnavailable)code=404;
                 response["data"]=endpoint.endsWith("automix")?QJsonObject{{"enabled",automix},{"vocalGuard",true}}:QJsonObject{{"mode",listeningMode},{"available",true}};
@@ -131,7 +150,8 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
                 if(endpoint.startsWith("/api/v2/queue/add-")) queueIds.append(body["id"].toString());
                 if(rejectEdit || (rejectQueueAt>=0 && queueIds.size()==rejectQueueAt)) code=403;
                 else if(transactionQueue && endpoint.endsWith("/add-later")) { if(changeAfterAppend) { changeQueueOnRead=true;changeAfterAppend=false; } ++queueWrites;const auto row=QJsonObject{{"track",resource(body["id"].toString(),body["type"].toString(),body["id"].toString())}};
-                    if(delayedAppendMs)QTimer::singleShot(delayedAppendMs,&server,[&,row]{fixtureQueue.append(row);});else fixtureQueue.append(row); }
+                    if(radioTailInsertion)fixtureQueue.insert(fixturePosition+1,row);
+                    else if(delayedAppendMs)QTimer::singleShot(delayedAppendMs,&server,[&,row]{fixtureQueue.append(row);});else fixtureQueue.append(row); }
                 else if(endpoint.endsWith("/dislike")) rating=-1;
                 else if(endpoint.endsWith("/love")) rating=1;
                 else if(endpoint.endsWith("/rating")) rating=body["rating"].toInt();
@@ -229,6 +249,7 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
                     if(offset&&failPage)code=503;
                 }
                 if(!data.contains("results"))data["data"]=path.path().startsWith("/v1/me/recommendations")&&malformedRecommendations?QJsonValue("invalid"):QJsonValue(rows);
+                if(path.path().endsWith("/tracks") && noRelatedTracks)data=QJsonObject{{"errors",QJsonArray{QJsonObject{{"code",otherTrackError?"50000":"40403"},{"status","404"}}}}};
                 response["data"]=data;if(rejectRead)code=403;
             } else if(endpoint.startsWith("/api/v2/playback/")) {
                 ++plays;playedShuffle=body["shuffle"].toBool();playedId=body["id"].toString();playedType=body["type"].toString();playedPath=endpoint;if(rejectPlay)code=422;
@@ -247,6 +268,9 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     failPage=true;browser.more();check(wait([&]{return !browser.busy();})&&!browser.error().isEmpty()&&browser.items().size()==1,"failed pagination preserves existing library rows");
     failPage=false;browser.more();check(wait([&]{return !browser.busy();})&&browser.items().size()==2&&!browser.hasMore(),"library pagination appends the next page once");
     browser.open(0);check(wait([&]{return !browser.busy();})&&browser.items().size()==3&&plays==0,"opening an album loads tracks without changing playback");
+    noRelatedTracks=true;browser.reload();check(wait([&]{return !browser.busy();})&&browser.items().isEmpty()&&browser.error().isEmpty(),"no-related-resources library album is a normal empty list");
+    otherTrackError=true;browser.reload();check(wait([&]{return !browser.busy();})&&!browser.error().isEmpty(),"other upstream track errors remain visible instead of becoming empty lists");
+    noRelatedTracks=false;otherTrackError=false;browser.reload();wait([&]{return !browser.busy();});
     browser.play(1);check(wait([&]{return !browser.starting();})&&playedType=="library-songs"&&playedId=="i.second"&&playedPath.endsWith("play-item"),"library track playback sends its actual resource ID and type");
     browser.play(2);QTest::qWait(50);check(plays==1,"unavailable tracks cannot start playback");
     browser.playCollection();check(wait([&]{return !browser.starting();})&&playedType=="library-albums"&&playedId=="l.first"&&playedPath.endsWith("play-collection"),"album Play uses Cider's collection playback endpoint");
@@ -463,10 +487,26 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     cider.copySongLink();check(wait([&]{return QGuiApplication::clipboard()->text()=="https://music.apple.com/ca/song/123";}),"current song sharing uses Cider's song URL");
     shareUrl="https://example.invalid/private";cider.copySongLink();QTest::qWait(100);
     check(QGuiApplication::clipboard()->text()=="https://music.apple.com/ca/song/123","unshareable current tracks preserve the clipboard");shareUrl="https://music.apple.com/ca/album/example/100?i=123";
+    seekFixture=true;
+    auto desktopState=[&](QVariantMap values) {QMetaObject::invokeMethod(&cider,"propertiesChanged",Q_ARG(QString,QString("org.mpris.MediaPlayer2.Player")),Q_ARG(QVariantMap,values),Q_ARG(QStringList,QStringList{}));};
+    desktopState({{"Metadata",QVariantMap{{"mpris:trackid","/spun/seek"},{"mpris:length",32000000LL}}},{"CanSeek",true},{"PlaybackStatus","Paused"},{"Position",5000000LL}});
+    cider.seek(12000);check(wait([&]{return cider.position()==12000;})&&snapshotPosition==12,"seek confirms Cider's actual playback time through the API");
+    desktopState({{"Position",5000000LL}});check(cider.position()==12000,"stale desktop position cannot undo a confirmed seek");
+    snapshotPosition=18;desktopState({{"Position",18000000LL}});check(wait([&]{return cider.position()==18000;}),"a later external seek updates the progress ring normally");
+    desktopState({{"Metadata",QVariantMap{}},{"CanSeek",false},{"Position",0LL}});
+    seekFixture=false;seekWrites=0;snapshotPosition=12.345;
+    cider.setVolume(.55);check(wait([&]{return cider.volume()==.55;})&&normalizedVolume==.55,"paired volume uses the normalized API scale");
+    QMetaObject::invokeMethod(&cider,"propertiesChanged",Q_ARG(QString,QString("org.mpris.MediaPlayer2.Player")),Q_ARG(QVariantMap,(QVariantMap{{"Volume",.37046}})),Q_ARG(QStringList,QStringList{}));
+    check(wait([&]{return volumeReads>=2;})&&cider.volume()==.55,"scaled desktop volume updates never overwrite the normalized slider value");
+    cider.setVolume(.3);cider.setVolume(.6);cider.setVolume(.55);QTest::qWait(1000);
+    check(normalizedVolume==.55&&volumeWrites==2,"rapid volume changes coalesce to the latest slider value");
+    rejectVolume=true;cider.setVolume(.9);QTest::qWait(900);
+    check(normalizedVolume==.55&&cider.volume()==.55,"denied volume writes retain the confirmed value");rejectVolume=false;
     cider.refreshAudioOptions();check(wait([&]{return !cider.audioBusy();})&&cider.audioOptions().contains("automix")&&cider.audioOptions()["listeningMode"]=="off","extra audio settings discover supported controls");
     cider.setAudioOption("automix",true);cider.setAudioOption("automix",true);
     check(wait([&]{return !cider.audioBusy();})&&automix&&audioWrites==1&&audioPatch.size()==1&&audioPatch.contains("enabled"),"Automix writes only its toggle and confirms state without duplicate writes");
-    cider.setAudioOption("listeningMode","unwind");check(wait([&]{return !cider.audioBusy();})&&listeningMode=="unwind"&&cider.audioOptions()["listeningMode"]=="unwind","listening mode reads back its confirmed state");
+    cider.setAudioOption("listeningMode","unwind");check(wait([&]{return !cider.audioBusy();})&&listeningMode=="antifatigue"&&cider.audioOptions()["listeningMode"]=="unwind","Unwind sends Cider's antifatigue value and reads back its confirmed state");
+    cider.refreshAudioOptions();check(wait([&]{return !cider.audioBusy();})&&cider.audioOptions()["listeningMode"]=="unwind","Cider's stored antifatigue mode maps back to Unwind");
     const int writtenAudio=audioWrites;cider.setAudioOption("listeningMode","unknown");check(audioWrites==writtenAudio,"unknown listening modes cannot be written");
     rejectAudio=true;cider.setAudioOption("automix",false);check(wait([&]{return !cider.audioBusy();})&&!cider.audioOptions().contains("automix")&&automix&&!cider.audioError().isEmpty(),"denied audio writes never show an unconfirmed toggle");rejectAudio=false;
     audioUnavailable=true;cider.refreshAudioOptions();check(wait([&]{return !cider.audioBusy();})&&cider.audioOptions().isEmpty(),"unsupported audio endpoints hide their controls");audioUnavailable=false;
@@ -552,7 +592,7 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     { Library otherEditor(&cider);otherEditor.renameSavedQueue(savedChoice(),"Second editor");
       check(!browser.undoSavedQueue()&&savedChoice()["title"]=="Second editor","stale Undo never overwrites another editor's changes"); }
     browser.reload();const auto expiresFile=browser.collection()["dataId"].toString();
-    browser.editSavedTrack(0,1,false);QTest::qWait(8200);
+    browser.editSavedTrack(0,1,false);wait([&]{return !browser.canUndoSavedQueue()&&!QFile::exists(temp+"/saved-queues/"+expiresFile+".json");});
     check(!browser.canUndoSavedQueue()&&!QFile::exists(temp+"/saved-queues/"+expiresFile+".json")&&!browser.undoSavedQueue(),"Undo expires and retires the old track file without retaining a track list in RAM");
     { Library inactiveJump(&cider);check(inactiveJump.openQuickTarget("saved",session["id"].toString()),"Quick jump can prepare a saved target while its browser is inactive");inactiveJump.setActive(true);
       check(inactiveJump.items().size()==browser.savedTracks(session["id"].toString()).size(),"activating a prepared Quick jump target loads its tracks");inactiveJump.setActive(false); }
@@ -592,7 +632,12 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     const QVariantMap radioSong{{"id","123"},{"type","songs"},{"path","/v1/catalog/ca/songs/123"}};
     browser.prepareRadio(radioSong);check(wait([&]{return !browser.radioBusy();})&&browser.radioAvailable(),"song radio resolves through existing Cider access");
     const int beforeCachedRadio=radioReads;browser.prepareRadio(radioSong);check(!browser.radioBusy()&&radioReads==beforeCachedRadio,"radio lookup reuses cached station metadata");
-    browser.playRadio();check(wait([&]{return !browser.radioBusy();})&&playedType=="stations"&&playedId=="ra.seed","explicit radio action plays the resolved station");
+    browser.playRadio();check(wait([&]{return !browser.radioBusy();})&&browser.radioError().isEmpty()&&playedType=="stations"&&playedId=="ra.seed"&&playedPath.endsWith("play-href")&&stationChecks>0,"radio uses the regular station route and verifies actual playback");
+    stationDelayChecks=2;const int beforeStation=plays;browser.playRadio();browser.playRadio();
+    check(wait([&]{return !browser.radioBusy();})&&browser.radioError().isEmpty()&&stationChecks>2&&plays==beforeStation+1,"radio waits for delayed station state without submitting playback twice");stationDelayChecks=0;
+    rejectStation=true;browser.playRadio();check(wait([&]{return !browser.radioBusy();})&&!browser.radioError().isEmpty(),"denied radio writes never claim playback success");rejectStation=false;
+    unconfirmedStation=true;browser.playRadio();QTest::qWait(10500);
+    check(wait([&]{return !browser.radioBusy();})&&!browser.radioError().isEmpty(),"an accepted station command with unchanged playback reports failure");unconfirmedStation=false;
     auto noRadio=radioSong;noRadio["id"]="999";browser.prepareRadio(noRadio);check(wait([&]{return !browser.radioBusy();})&&!browser.radioAvailable()&&browser.radioError().isEmpty(),"song without radio has a normal unavailable state");
     auto slowRadio=radioSong;slowRadio["id"]="777";browser.prepareRadio(slowRadio);QTest::qWait(50);browser.prepareRadio(noRadio);QTest::qWait(600);
     check(!browser.radioAvailable()&&!browser.radioBusy(),"late radio lookup cannot overwrite another song menu");
@@ -709,7 +754,7 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
         check(wait([&]{return !cider.audioBusy();}),"audio popup finishes discovering extras");
         if(!captures.isEmpty())window->grabWindow().save(captures+"/12-audio-settings.png");
         click("automixToggle");check(wait([&]{return !cider.audioBusy();})&&!automix,"Automix toggles from the themed audio popup");
-        click("listeningMode_gaming");check(wait([&]{return !cider.audioBusy();})&&listeningMode=="gaming","listening mode switches from its segmented control");
+        click("listeningMode_gaming");check(wait([&]{return !cider.audioBusy();})&&listeningMode=="game","Gaming sends Cider's game value from its segmented control");
         click("crossfadeToggle");check(wait([&]{return !cider.crossfadeBusy();})&&!crossfade,"crossfade toggle operates from the themed popup");
         auto *duration=find(window->contentItem(),"crossfadeDuration");check(duration&&!duration->isEnabled(),"duration is disabled when crossfade is off");
         click("crossfadeToggle");wait([&]{return !cider.crossfadeBusy();});
@@ -937,6 +982,11 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     fixtureQueue={queueTrack("a"),queueTrack("b"),queueTrack("c")};fixturePosition=0;syncQueue();
     cider.insertQueue({track("x"),track("x"),track("y")},1,cider.queueRevision());
     check(wait([&]{return !cider.controlBusy()&&!cider.queueBusy();})&&ids()==QStringList{"a","x","x","y","b","c"}&&fixturePosition==0,"queue insertion preserves batch order and duplicates without changing playback");
+    fixtureQueue={queueTrack("a"),queueTrack("b"),queueTrack("c")};fixturePosition=0;radioTailInsertion=true;syncQueue();
+    cider.insertQueue({track("x"),track("x"),track("y")},3,cider.queueRevision());
+    check(wait([&]{return !cider.controlBusy()&&!cider.queueBusy();})&&ids()==QStringList{"a","b","c","x","x","y"},"insertion detects additions before Cider's radio tail and moves them to the requested slot");
+    cider.removeQueue(1,cider.queueRevision());wait([&]{return !cider.controlBusy()&&!cider.queueBusy();});cider.undoQueueRemoval();
+    check(wait([&]{return !cider.controlBusy()&&!cider.queueBusy();})&&ids()==QStringList{"a","b","c","x","x","y"},"Undo restores an occurrence when Cider inserts before its radio tail");radioTailInsertion=false;
     const int beforeStale=queueWrites;const int stale=cider.queueRevision();fixtureQueue.append(queueTrack("external"));syncQueue();cider.insertQueue({track("z")},1,stale);
     check(!cider.controlBusy()&&queueWrites==beforeStale,"stale drop cannot mutate the queue");
     changeQueueOnRead=true;cider.insertQueue({track("z")},1,cider.queueRevision());

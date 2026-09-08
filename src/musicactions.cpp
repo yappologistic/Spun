@@ -40,8 +40,9 @@ void MusicActions::request(const QByteArray &method, const QString &path, const 
     QNetworkRequest req(url); req.setTransferTimeout(8000);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
     req.setRawHeader("apptoken",m_cider->m_apiToken.toUtf8());
-    req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
-    auto *reply=m_network.sendCustomRequest(req,method,body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact));
+    const bool sendsBody=method!="GET" && method!="HEAD";
+    if(sendsBody)req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
+    auto *reply=m_network.sendCustomRequest(req,method,sendsBody?QJsonDocument(body).toJson(QJsonDocument::Compact):QByteArray());
     if (mutation) m_write=reply; else m_read=reply;
     const int generation=m_generation;
     connect(reply,&QNetworkReply::readyRead,reply,[reply] { if (reply->bytesAvailable()>256*1024) reply->abort(); });

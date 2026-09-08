@@ -122,6 +122,7 @@ public:
     qint64 position() const;
     qint64 duration() const { return m_duration; }
     double volume() const { return m_volume; }
+    bool volumeReady() const { return m_apiToken.isEmpty() || m_volumeReady; }
     QVariantMap audioOptions() const { return m_audioOptions; }
     bool audioBusy() const { return m_audioBusy; }
     QString audioError() const { return m_audioError; }
@@ -207,6 +208,7 @@ private:
     QVariantList m_insertItems;
     QStringList m_insertExpected;
     int m_insertAt=0, m_insertDone=0, m_insertPosition=-1;
+    void verifyAppend(const QStringList &before,int position,const QString &key,int attempts=8);
     bool m_restoringQueue=false;
     void insertNext();
     void verifyInsert(const QStringList &before,int beforePosition,std::function<void()> done,int attempts=24);
@@ -269,8 +271,13 @@ private:
     QString m_pendingArtFile;
     quint64 m_artGeneration = 0;
     bool m_artDecodeActive = false;
-    qint64 m_position = 0, m_duration = 0;
-    double m_volume = 1;
+    void confirmSeek(const QString &track, int generation, qint64 target, int attempts=5);
+    qint64 m_position = 0, m_duration = 0, m_desktopPosition = -1, m_staleDesktopPosition = -1;
+    int m_seekGeneration=0;
+    bool m_positionFromApi=false;
+    void refreshVolume();
+    double m_volume = 1, m_desktopVolume = -1;
+    bool m_volumeReading=false, m_volumeReadAgain=false, m_volumeReady=false;
     int m_repeat = 0;
     QElapsedTimer m_clock;
     QTimer m_tick, m_poll;

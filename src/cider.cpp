@@ -140,8 +140,23 @@ void Cider::apply(const QVariantMap &v) {
             emit playingChanged();
         }
     }
-    if (v.contains("Position")) { m_position = unwrap(v.value("Position")).toLongLong()/1000; m_clock.restart(); if (position() != previousPosition) emit positionChanged(); }
-    if (v.contains("Volume")) { const auto volume = unwrap(v.value("Volume")).toDouble(); if (volume != m_volume) { m_volume=volume; emit volumeChanged(); } }
+    if (v.contains("Position")) {
+        m_desktopPosition=unwrap(v.value("Position")).toLongLong()/1000;
+        if(metadataChanged || !m_positionFromApi || qAbs(m_desktopPosition-position())<1200) {
+            m_positionFromApi=false;m_position=m_desktopPosition;m_clock.restart();
+            if(position()!=previousPosition)emit positionChanged();
+        } else if(m_desktopPosition!=m_staleDesktopPosition) {
+            m_staleDesktopPosition=m_desktopPosition;confirmSeek(m_track,m_seekGeneration,-1,0);
+        }
+    }
+    if (v.contains("Volume")) {
+        const auto volume=unwrap(v.value("Volume")).toDouble();
+        if(volume!=m_desktopVolume) {
+            m_desktopVolume=volume;
+            if(m_apiToken.isEmpty()) { m_volume=volume; emit volumeChanged(); }
+            else refreshVolume();
+        }
+    }
     if (v.contains("Shuffle")) { bool shuffle = unwrap(v.value("Shuffle")).toBool(); if (shuffle != m_shuffle) { m_shuffle=shuffle; emit settingsChanged(); } }
     if (v.contains("LoopStatus")) { int repeat = qMax(0, QStringList{"None","Playlist","Track"}.indexOf(unwrap(v.value("LoopStatus")).toString())); if (repeat != m_repeat) { m_repeat=repeat; emit settingsChanged(); } }
     if (v.contains("CanSeek")) m_canSeek = unwrap(v.value("CanSeek")).toBool();
@@ -152,7 +167,14 @@ void Cider::apply(const QVariantMap &v) {
 void Cider::propertiesChanged(const QString &interface, const QVariantMap &values, const QStringList &invalidated) {
     if (interface == iface) { apply(values); if (!invalidated.isEmpty()) refresh(); }
 }
-void Cider::seeked(qlonglong value) { m_position=value/1000; m_clock.restart(); emit positionChanged(); }
+void Cider::seeked(qlonglong value) {
+    m_desktopPosition=value/1000;
+    if(m_positionFromApi && qAbs(m_desktopPosition-position())>=1200) {
+        if(m_desktopPosition!=m_staleDesktopPosition) {m_staleDesktopPosition=m_desktopPosition;confirmSeek(m_track,m_seekGeneration,-1,0);}
+        return;
+    }
+    m_positionFromApi=false;m_position=m_desktopPosition;m_clock.restart();emit positionChanged();
+}
 void Cider::call(const QString &method, const QVariantList &args) {
     if (!m_available) { raise(); return; }
     auto message = QDBusMessage::createMethodCall(service, path, iface, method); message.setArguments(args);
@@ -200,11 +222,55 @@ void Cider::seek(qint64 ms) {
     if (!m_canSeek || !m_track.startsWith('/')) return;
     const auto position=qBound<qint64>(0, ms, m_duration);
     const auto track = m_track;
-    schedule("seek", [this, track, position] {
-        if (track == m_track) call("SetPosition", {QVariant::fromValue(QDBusObjectPath(track)), QVariant::fromValue(position*1000)});
+    const int generation=++m_seekGeneration;
+    schedule("seek", [this, track, position, generation] {
+        if(track!=m_track || generation!=m_seekGeneration)return;
+        if(m_apiToken.isEmpty()) {call("SetPosition",{QVariant::fromValue(QDBusObjectPath(track)),QVariant::fromValue(position*1000)});return;}
+        apiRequest("POST","/playback/seek",{{"position",position/1000.0}},[this,track,position,generation](bool ok,QJsonObject) {
+            if(ok)QTimer::singleShot(160,this,[this,track,position,generation]{confirmSeek(track,generation,position);});
+        });
     });
 }
-void Cider::setVolume(double value) { set("Volume", qBound(0.0,value,1.0)); }
+void Cider::confirmSeek(const QString &track,int generation,qint64 target,int attempts) {
+    if(track!=m_track || generation!=m_seekGeneration)return;
+    apiRequest("GET","/playback",{},[this,track,generation,target,attempts](bool ok,QJsonObject json) {
+        if(track!=m_track || generation!=m_seekGeneration)return;
+        const auto seconds=json.value("data").toObject().value("time").toObject().value("currentTime");
+        const qint64 actual=qRound64(seconds.toDouble()*1000);
+        if(ok && seconds.isDouble() && actual>=0 && (target<0 || qAbs(actual-target)<1200)) {
+            // Some Cider versions leave MPRIS Position unchanged after a seek.
+            // Keep the confirmed time until that desktop value changes again.
+            m_staleDesktopPosition=m_desktopPosition;m_positionFromApi=true;
+            m_position=actual;m_clock.restart();emit positionChanged();return;
+        }
+        if(ok && attempts>0) {QTimer::singleShot(250,this,[this,track,generation,target,attempts]{confirmSeek(track,generation,target,attempts-1);});return;}
+        emit apiFeedback("Cider hasn’t confirmed the seek position. Check playback before trying again.",true);
+    },false);
+}
+void Cider::refreshVolume() {
+    if(m_volumeReading) { m_volumeReadAgain=true; return; }
+    m_volumeReading=true;
+    apiRequest("GET","/audio/volume",{},[this](bool ok,QJsonObject json) {
+        m_volumeReading=false;
+        const auto value=json.value("data").toObject().value("volume");
+        if(ok && value.isDouble() && value.toDouble()>=0 && value.toDouble()<=1) {
+            m_volumeReady=true;
+            if(m_volume!=value.toDouble()) { m_volume=value.toDouble(); emit volumeChanged(); }
+        }
+        if(std::exchange(m_volumeReadAgain,false))refreshVolume();
+    },false);
+}
+void Cider::setVolume(double value) {
+    value=qBound(0.0,value,1.0);
+    if(m_apiToken.isEmpty()) { set("Volume",value); return; }
+    // Cider's MPRIS read and write paths use different volume curves.
+    // Keep paired controls on its normalized API scale instead.
+    schedule("set:Volume",[this,value] {
+        apiRequest("PATCH","/audio/volume",{{"volume",value}},[this](bool ok,QJsonObject) {
+            if(ok)QTimer::singleShot(160,this,&Cider::refreshVolume);
+        });
+    });
+}
 void Cider::setShuffle(bool value) { changeMode("shuffle",value); }
 void Cider::setAutoplay(bool value) { changeMode("autoplay",value); }
 void Cider::setRepeatMode(int value) { set("LoopStatus", QStringList{"None","Playlist","Track"}[qBound(0,value,2)]); }
@@ -298,7 +364,7 @@ void Cider::connectQueue(const QString &token) {
     ++m_tokenGeneration; m_queueBusy=false;
     if(!m_batchOps.isEmpty()) { m_afterQueue={};finishBatch(false); }
     if(!m_cleanupIndices.isEmpty()) { m_afterQueue={};finishCleanup(false); }
-    m_apiToken=value; m_needsToken=false; m_queueError.clear();updateEvents();
+    m_apiToken=value; m_volumeReady=false;refreshVolume(); m_needsToken=false; m_queueError.clear();updateEvents();
     m_recoveryTimer.stop(); m_connectionState.clear(); m_connectionMessage.clear(); emit connectionChanged();
     if(m_queueVisible || m_libraryVisible)m_queuePoll.start();
     refreshQueue();
@@ -598,11 +664,14 @@ void Cider::requestDiscTracks(const QString &path, int generation) {
 // Cider v2 contracts are shared with ciderapp/CiderDeck's official client.
 void Cider::apiRequest(const QByteArray &method, const QString &endpoint, const QJsonObject &body, std::function<void(bool,QJsonObject)> done, bool reportError) {
     if (m_apiToken.isEmpty()) { if(reportError)emit apiFeedback("Connect Spun to Cider in Queue first.",true); done(false,{}); return; }
-    auto url=m_rpcBase; url.setPath("/api/v2"+endpoint); url.setQuery(QString());
+    const QUrl relative("/api/v2"+endpoint);
+    auto url=m_rpcBase; url.setPath(relative.path()); url.setQuery(relative.query());
     QNetworkRequest req(url); req.setTransferTimeout(6000);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
-    req.setRawHeader("apptoken",m_apiToken.toUtf8()); req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
-    auto *reply=m_rpcNetwork.sendCustomRequest(req,method,body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact));
+    req.setRawHeader("apptoken",m_apiToken.toUtf8());
+    const bool sendsBody=method!="GET" && method!="HEAD";
+    if(sendsBody)req.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");
+    auto *reply=m_rpcNetwork.sendCustomRequest(req,method,sendsBody?QJsonDocument(body).toJson(QJsonDocument::Compact):QByteArray());
     connect(reply,&QNetworkReply::readyRead,reply,[reply] { if (reply->bytesAvailable()>512*1024) reply->abort(); });
     connect(reply,&QNetworkReply::finished,this,[this,reply,done,reportError] {
         reply->deleteLater(); const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -806,7 +875,7 @@ void Cider::finishInsert(bool success) {
     m_insertItems.clear();m_insertExpected.clear();m_controlBusy=false;m_restoringQueue=false;
     emit controlChanged();emit queueStatusChanged();
     emit apiFeedback(success?(undo?"Restored to its original position":(total==1?QString("Song inserted"):QString("%1 tracks inserted").arg(total))):
-        QString("%1 of %2 tracks placed. Check the queue before retrying; a song may remain at the end.").arg(done).arg(total),!success);
+        QString("%1 of %2 tracks placed. Check the queue before retrying; a song may already have been added.").arg(done).arg(total),!success);
 }
 void Cider::verifyInsert(const QStringList &before,int beforePosition,std::function<void()> done,int attempts) {
     m_afterQueue=[this,before,beforePosition,done,attempts] {
@@ -829,19 +898,35 @@ void Cider::insertNext() {
     apiRequest("POST","/queue/add-later",{{"type",row.value("type").toString()},{"id",row.value("id").toString()}},[this,row](bool ok,QJsonObject) {
         if(!ok) { finishInsert(false);refreshQueue();return; }
         const auto before=m_insertExpected;const int position=m_insertPosition;
-        m_insertExpected.append(queueKey(row));
-        verifyInsert(before,position,[this] {
-            const int from=m_queue.size()-1,to=m_insertAt+m_insertDone;
-            if(from==to) { ++m_insertDone;insertNext();return; }
-            apiRequest("POST","/queue/move",{{"from",from},{"to",to}},[this,from,to](bool ok,QJsonObject) {
-                if(!ok) { finishInsert(false);refreshQueue();return; }
-                const auto beforeMove=m_insertExpected;const int beforePosition=m_insertPosition;
-                m_insertExpected.move(from,to);
-                if(to<=m_insertPosition)++m_insertPosition;
-                verifyInsert(beforeMove,beforePosition,[this] {++m_insertDone;insertNext();});
-            });
-        });
+        verifyAppend(before,position,queueKey(row));
     });
+}
+void Cider::verifyAppend(const QStringList &before,int position,const QString &key,int attempts) {
+    m_afterQueue=[this,before,position,key,attempts] {
+        const auto actual=queueKeys(m_queue);
+        if(actual==before && m_queueIndex==position && attempts>0) {
+            QTimer::singleShot(250,this,[this,before,position,key,attempts] {if(!m_insertItems.isEmpty())verifyAppend(before,position,key,attempts-1);});return;
+        }
+        if(actual.size()!=before.size()+1 || m_queueIndex!=position) {finishInsert(false);return;}
+        // Cider places user additions before an automatically generated radio tail.
+        // Locate the one added occurrence in linear time, preserving every old row.
+        int prefix=0,suffix=0;
+        while(prefix<before.size() && actual[prefix]==before[prefix])++prefix;
+        while(suffix<before.size() && actual[actual.size()-1-suffix]==before[before.size()-1-suffix])++suffix;
+        const int from=prefix;
+        if(from<=position || from<before.size()-suffix || actual[from]!=key) {finishInsert(false);return;}
+        m_insertExpected=actual;
+        const int to=m_insertAt+m_insertDone;
+        if(from==to) { ++m_insertDone;insertNext();return; }
+        apiRequest("POST","/queue/move",{{"from",from},{"to",to}},[this,from,to](bool ok,QJsonObject) {
+            if(!ok) { finishInsert(false);refreshQueue();return; }
+            const auto beforeMove=m_insertExpected;const int beforePosition=m_insertPosition;
+            m_insertExpected.move(from,to);
+            if(to<=m_insertPosition)++m_insertPosition;
+            verifyInsert(beforeMove,beforePosition,[this] {++m_insertDone;insertNext();});
+        });
+    };
+    fetchQueue();
 }
 QStringList Cider::launchCommand() {
     const auto native=QStandardPaths::findExecutable("cider");
@@ -879,7 +964,7 @@ void Cider::refreshAudioOptions() {
         if(ok && data.value("enabled").isBool())m_audioOptions["automix"]=data.value("enabled").toBool();else m_audioOptions.remove("automix");
         apiRequest("GET","/audio/listening-mode",{},[this](bool ok,QJsonObject json) {
             const auto data=json.value("data").toObject();const auto mode=data.value("mode").toString();
-            if(ok && data.value("available").toBool(true) && QStringList{"off","gaming","unwind"}.contains(mode))m_audioOptions["listeningMode"]=mode;else m_audioOptions.remove("listeningMode");
+            if(ok && data.value("available").toBool(true) && QStringList{"off","game","antifatigue"}.contains(mode))m_audioOptions["listeningMode"]=mode=="game"?"gaming":mode=="antifatigue"?"unwind":"off";else m_audioOptions.remove("listeningMode");
             if(m_audioOptions.isEmpty())m_audioError="Extra audio controls aren’t available with this Cider connection.";
             m_audioBusy=false;emit audioOptionsChanged();
         });
@@ -892,11 +977,12 @@ void Cider::setAudioOption(const QString &key,const QVariant &value) {
     const auto endpoint=key=="automix"?"/audio/automix":"/audio/listening-mode";
     const auto field=key=="automix"?"enabled":"mode";
     m_audioBusy=true;m_audioError.clear();emit audioOptionsChanged();
-    apiRequest("PATCH",endpoint,{{field,QJsonValue::fromVariant(value)}},[this,key,value,endpoint,field](bool ok,QJsonObject) {
+    const QVariant wireValue=key=="listeningMode"?(value=="gaming"?QVariant("game"):value=="unwind"?QVariant("antifatigue"):value):value;
+    apiRequest("PATCH",endpoint,{{field,QJsonValue::fromVariant(wireValue)}},[this,key,value,wireValue,endpoint,field](bool ok,QJsonObject) {
         if(!ok) { m_audioOptions.remove(key);m_audioBusy=false;m_audioError="Refresh audio settings before trying again.";emit audioOptionsChanged();return; }
-        apiRequest("GET",endpoint,{},[this,key,value,field](bool read,QJsonObject json) {
+        apiRequest("GET",endpoint,{},[this,key,value,wireValue,field](bool read,QJsonObject json) {
             const auto actual=json.value("data").toObject().value(field).toVariant();
-            if(read && actual==value)m_audioOptions[key]=actual;
+            if(read && actual==wireValue)m_audioOptions[key]=value;
             else { m_audioOptions.remove(key);m_audioError="Cider hasn’t confirmed this setting. Refresh to check."; }
             m_audioBusy=false;emit audioOptionsChanged();
         });

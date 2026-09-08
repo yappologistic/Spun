@@ -179,7 +179,8 @@ void Library::request(const QString &path, const QJsonObject &body, bool action,
     if (action) m_actionReply=reply; else m_reply=reply;
     const int generation=m_generation;
     connect(reply,&QNetworkReply::readyRead,reply,[reply] { if (reply->bytesAvailable()>4*1024*1024) reply->abort(); });
-    connect(reply,&QNetworkReply::finished,this,[this,reply,generation,action,done] {
+    const bool trackRelationship=!action && path=="/api/v1/amapi/run-v3" && QRegularExpression("^/v1/me/library/(albums|playlists)/[A-Za-z0-9._-]+/tracks$").match(QUrl(body.value("path").toString()).path()).hasMatch();
+    connect(reply,&QNetworkReply::finished,this,[this,reply,generation,action,done,trackRelationship] {
         reply->deleteLater();
         if (!action && generation!=m_generation) return;
         const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -188,6 +189,9 @@ void Library::request(const QString &path, const QJsonObject &body, bool action,
         if(status!=403 || action)m_cider->observeConnection(status,reply->error());
         const auto json=QJsonDocument::fromJson(reply->readAll());
         auto object=json.object();
+        const auto errors=object.value("data").toObject().value("errors").toArray();
+        if(trackRelationship && status==200 && !errors.isEmpty() && std::all_of(errors.begin(),errors.end(),[](const QJsonValue &error){return error.toObject().value("code")=="40403";}))
+            object["data"]=QJsonObject{{"data",QJsonArray{}}};
         const bool upstreamError=object.contains("errors") || object.value("data").toObject().contains("errors");
         if (reply->error()!=QNetworkReply::NoError || status<200 || status>=300 || !json.isObject() || upstreamError) {
             QString message;
@@ -261,7 +265,7 @@ QVariantMap Library::item(const QJsonObject &value, const QString &fallbackType)
         {"duration",attrs.value("durationInMillis").toInteger()},{"releaseDate",attrs.value("releaseDate").toString()},
         {"trackCount",attrs.value("trackCount").toInt(-1)},
         {"catalogId",playParams.value("catalogId").toString()},{"url",attrs.value("url").toString()},
-        {"playable",!playParams.isEmpty()}, {"path",value.value("href").toString()}};
+        {"playable",!playParams.isEmpty() && !(type.endsWith("albums") && attrs.value("trackCount").toInt(-1)==0)}, {"path",value.value("href").toString()}};
 }
 void Library::fetch(const QString &path, bool append) {
     if (path.isEmpty()) { m_busy=false; m_loaded=true; m_next.clear(); setItems({}); m_preservePosition=false; emit changed(); return; }
@@ -381,7 +385,8 @@ void Library::shuffleCollection(const QVariantMap &selected) {
     start(selected,true);
 }
 void Library::start(const QVariantMap &selected, bool shuffle) {
-    if (m_starting || m_cider->controlBusy() || selected.value("type")=="artists" || !selected["playable"].toBool()) return;
+    if (m_starting || m_radioStarting || m_cider->controlBusy() || selected.value("type")=="artists" || !selected["playable"].toBool()) return;
+    if(selected.value("type")=="stations") {startStation(selected,false);return;}
     const bool song=selected["type"].toString().endsWith("songs");
     rememberSearch();
     m_starting=true; m_playError.clear(); emit changed();
@@ -875,9 +880,9 @@ void Library::radioRequest(const QString &endpoint,const QJsonObject &body,std::
         const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto json=QJsonDocument::fromJson(reply->readAll());
         if(token!=m_cider->m_tokenGeneration || (m_radioCurrent && m_radioTrack!=m_cider->m_track)) { m_radioBusy=false;m_radioError="Song or connection changed. Reopen the menu.";emit radioChanged();return; }
-        m_cider->observeConnection(status,reply->error());
+        if(status!=403)m_cider->observeConnection(status,reply->error());
         if(reply->error()!=QNetworkReply::NoError || status!=200 || !json.isObject()) {
-            m_radioBusy=false;m_radioError="Couldn’t check radio. Reopen the menu to retry.";emit radioChanged();return;
+            m_radioBusy=false;m_radioError=status==401 || status==403?"Allow library access for Spun in Cider to find radio.":"Couldn’t check radio. Reopen the menu to retry.";emit radioChanged();return;
         }
         done(json.object());
     });
@@ -906,7 +911,10 @@ void Library::resolveRadio(const QVariantMap &song) {
         bool absent=!errors.isEmpty();for(const auto &error:errors)if(error.toObject().value("code").toString()!="40403")absent=false;
         if(!data.value("data").isArray() && !absent) m_radioError="Couldn’t check radio. Reopen the menu to retry.";
         else {
-            for(const auto &value:data.value("data").toArray()) { auto row=item(value.toObject());if(row.value("type")=="stations" && row.value("playable").toBool()) { m_radioStation=row;break; } }
+            for(const auto &value:data.value("data").toArray()) { auto row=item(value.toObject());if(row.value("type")=="stations" && row.value("playable").toBool()) {
+                if(row.value("path").toString().isEmpty())row["path"]="/v1/catalog/"+path.split('/').value(3)+"/stations/"+row.value("id").toString();
+                if(!validatedPin(row).isEmpty()) {m_radioStation=row;break;}
+            } }
             if(m_radioCache.size()>=64)m_radioCache.clear();
             m_radioCache.insert(path,m_radioStation);
         }
@@ -914,15 +922,53 @@ void Library::resolveRadio(const QVariantMap &song) {
     });
 }
 void Library::playRadio() {
-    if(radioBusy() || m_radioStation.isEmpty() || m_cider->controlBusy())return;
+    if(radioBusy() || m_starting || m_radioStation.isEmpty() || m_cider->controlBusy())return;
     if(m_radioResolvedToken!=m_cider->m_tokenGeneration) { m_radioStation.clear();emit radioChanged();emit m_cider->apiFeedback("Cider access changed. Choose radio again.",true);return; }
     if(m_radioCurrent && m_radioTrack!=m_cider->m_track) { m_radioStation.clear();emit radioChanged();emit m_cider->apiFeedback("Song changed. Choose radio again.",true);return; }
-    m_radioStarting=true;emit radioChanged();
+    startStation(m_radioStation,true);
+}
+void Library::finishStation(bool radio,const QString &error) {
+    if(radio) {m_radioStarting=false;m_radioError=error;emit radioChanged();}
+    else {m_starting=false;m_playError=error;emit changed();}
+    emit m_cider->apiFeedback(error.isEmpty()?"Radio started":error,!error.isEmpty());
+    if(error.isEmpty()) {m_cider->refresh();if(m_cider->queueVisible() || m_cider->libraryVisible())m_cider->refreshQueue();}
+}
+void Library::startStation(const QVariantMap &station,bool radio) {
+    if(validatedPin(station).isEmpty() || station.value("type")!="stations") {finishStation(radio,"This station has no valid playback link.");return;}
+    if(radio) {m_radioStarting=true;m_radioError.clear();emit radioChanged();}
+    else {m_starting=true;m_playError.clear();emit changed();}
+    m_stationClock.start();const int token=m_cider->m_tokenGeneration;
     const QPointer<Library> guard(this);
-    m_cider->apiRequest("POST","/playback/play-collection",{{"type","stations"},{"id",m_radioStation.value("id").toString()}},[this,guard](bool ok,QJsonObject) {
+    // Cider's awaited collection RPC may never settle for stations. The regular
+    // resource route also handles streamed radio; its receipt still needs readback.
+    m_cider->apiRequest("POST","/playback/play-href",{{"href",station.value("path").toString()}},[this,guard,station,radio,token](bool ok,QJsonObject) {
         if(!guard)return;
-        m_radioStarting=false;emit radioChanged();
-        emit m_cider->apiFeedback(ok?"Radio started":"Cider couldn’t start radio. Try again.",!ok);
-        if(ok) { m_cider->refresh();if(m_cider->queueVisible() || m_cider->libraryVisible())m_cider->refreshQueue(); }
-    });
+        if(!ok) {finishStation(radio,"Cider couldn’t accept the station. Check its connection and playback access.");return;}
+        verifyStation(station,radio,token);
+    },false);
+}
+void Library::verifyStation(const QVariantMap &station,bool radio,int token) {
+    if(token!=m_cider->m_tokenGeneration) {finishStation(radio,"Cider access changed while starting radio. Check playback before trying again.");return;}
+    const QPointer<Library> guard(this);
+    m_cider->apiRequest("GET","/queue/position",{},[this,guard,station,radio,token](bool ok,QJsonObject json) {
+        if(!guard)return;
+        const int index=json.value("data").toObject().value("position").toInt(-1);
+        if(!ok) {finishStation(radio,"Couldn’t verify radio playback. Check Cider before trying again.");return;}
+        m_cider->apiRequest("GET",QString("/queue?offset=%1&limit=1").arg(qMax(0,index)),{},[this,guard,station,radio,token](bool read,QJsonObject queue) {
+            if(!guard)return;
+            const auto rows=queue.value("data").toObject().value("items").toArray();
+            const auto context=rows.isEmpty()?QJsonObject():rows.first().toObject().value("containerContext").toObject();
+            const bool matches=read && context.value("id").toString()==station.value("id").toString();
+            m_cider->apiRequest("GET","/playback",{},[this,guard,station,radio,token,matches](bool playing,QJsonObject state) {
+                if(!guard)return;
+                if(token!=m_cider->m_tokenGeneration) {finishStation(radio,"Cider access changed while starting radio. Check playback before trying again.");return;}
+                const auto data=state.value("data").toObject();
+                const auto params=data.value("nowPlaying").toObject().value("playParams").toObject();
+                const bool stream=params.value("kind")=="station" && params.value("id").toString()==station.value("id").toString();
+                if((matches || stream) && playing && data.value("state")=="playing") {finishStation(radio);return;}
+                if(!playing || m_stationClock.elapsed()>=10000) {finishStation(radio,"Cider hasn’t started this station. Check playback before trying again.");return;}
+                QTimer::singleShot(350,this,[this,station,radio,token] {verifyStation(station,radio,token);});
+            },false);
+        },false);
+    },false);
 }

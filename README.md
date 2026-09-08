@@ -182,6 +182,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QSG_RENDER_LOOP=basic QT_QPA
 
 The tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. The normal player is built separately from the diagnostic executable.
 
+For a connected Cider instance, `--inspect-cider` and `--inspect-library` check live data without changing playback. The opt-in `--verify-cider-writes` also exercises playback, volume, repeat, queue insertion/removal/Undo and audio settings, then starts song radio. It restores its temporary queue and setting edits but leaves radio playing. Use `--config /path/to/test/settings.ini` with a privately paired test profile; never share its connection file or captured library data.
+
 For controlled performance measurements, run `python3 scripts/benchmark.py --output /tmp/spun-performance`. Its isolated scenes do not connect to your Cider instance. Offscreen measurements are useful comparisons, not whole-desktop GPU measurements. Regenerate the original soundcheck with `python3 scripts/make-demo.py` after building; this additionally requires FFmpeg.
 
 </details>
