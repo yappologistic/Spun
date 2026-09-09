@@ -897,6 +897,8 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     auto *cancelSave=find(window->contentItem(),"cancelSaveQueue");
     auto *saveDialog=window->findChild<QObject *>("saveQueuePopup");
     check(saveAction&&cancelSave&&saveDialog&&saveDialog->property("modal").toBool()&&saveAction->y()==cancelSave->y()&&cancelSave->x()+cancelSave->width()<saveAction->x(),"Save dialog is modal with aligned, separated Cancel and Save actions");
+    check(saveAction->property("text").toString()=="Rename","rename dialog names its confirmation action correctly");
+    check(qAbs(saveDialog->property("y").toReal()+saveDialog->property("height").toReal()/2-window->property("layoutHeight").toReal()/2)<1,"save and rename dialogs align to the logical window center");
     const auto dialogSize=window->size();
     const bool dialogLibraryOpen=window->property("libraryOpen").toBool(),dialogQueueOpen=window->property("queueOpen").toBool();
     testKeyClick(window,Qt::Key_M,Qt::ControlModifier);
@@ -921,7 +923,11 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     if(!captures.isEmpty())window->grabWindow().save(captures+"/17-edited-queue.png");
     click("libraryActions0");click("savedTrackRemove");check(browser.items().size()==1&&browser.collection()["trackCount"]==1,"saved song menu removes the song and updates its count");
     check(edits==beforeSavedUiWrites&&plays==beforeSavedUiPlays,"saved queue UI editing leaves Cider playback and queue untouched");
-    click("collectionActions");if(!captures.isEmpty())window->grabWindow().save(captures+"/12-saved-queue-menu.png");click("deleteSavedQueueAction");QTest::qWait(150);click("confirmDeleteQueue");
+    click("collectionActions");if(!captures.isEmpty())window->grabWindow().save(captures+"/12-saved-queue-menu.png");click("deleteSavedQueueAction");QTest::qWait(250);
+    auto *deleteCancel=find(window->contentItem(),"cancelDeleteQueue");
+    check(deleteCancel&&deleteCancel->hasActiveFocus(),"delete confirmation initially focuses Cancel");
+    if(!captures.isEmpty())window->grabWindow().save(captures+"/26-delete-queue.png");
+    click("confirmDeleteQueue");
     check(browser.items().isEmpty()&&browser.collection().isEmpty(),"saved queue deletion requires confirmation and returns to the list");
     fixtureQueue={QJsonObject{{"track",resource("123","songs","First Light")}}};fixturePosition=0;cider.refreshQueue();wait([&]{return !cider.queueBusy();});
     auto *savePopup=window->findChild<QObject *>("saveQueuePopup");check(savePopup!=nullptr,"save queue dialog exists");
@@ -1099,6 +1105,10 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     auto *qualityPopup=window->findChild<QObject *>("audioQualityPopup");check(qualityPopup&&qualityPopup->property("visible").toBool(),"audio quality opens in a themed popup");if(qualityPopup)QMetaObject::invokeMethod(qualityPopup,"close");
     window->setProperty("queueOpen",true);syncQueue();cider.removeQueue(1,cider.queueRevision());wait([&]{return !cider.controlBusy()&&!cider.queueBusy();});QTest::qWait(200);
     auto *undoButton=find(window->contentItem(),"undoQueueButton");check(undoButton&&undoButton->isVisible(),"confirmed removal exposes the Undo action");
+    auto *feedbackTimer=window->findChild<QObject *>("noticeTimer");
+    check(feedbackTimer&&!feedbackTimer->property("running").toBool(),"actionable Undo feedback does not auto-dismiss");
+    testKeyClick(window,Qt::Key_G,Qt::AltModifier);
+    check(undoButton->hasActiveFocus(),"Alt+G reaches Undo without opening another panel");
     if(!captures.isEmpty())window->grabWindow().save(captures+"/13-undo.png");
     if(undoButton&&undoButton->isVisible()){click("undoQueueButton");check(wait([&]{return !cider.controlBusy()&&!cider.queueBusy();})&&!cider.canUndoQueue(),"Undo button restores the removed item");}
     fixtureQueue={queueTrack("History"),queueTrack("Current"),queueTrack("Upcoming"),queueTrack("Current"),queueTrack("Upcoming")};fixturePosition=1;syncQueue();QTest::qWait(100);
@@ -1106,6 +1116,7 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     click("savedQueueMenuButton");click("deduplicateQueueAction");
     auto *cleanupPopup=window->findChild<QObject *>("cleanupPopup");
     check(cleanupPopup&&cleanupPopup->property("visible").toBool()&&cleanupPopup->property("preview").toMap()["rows"].toList().size()==2&&queueWrites==beforePreviewUi,"queue menu opens a read-only duplicate preview");
+    check(wait([&]{return find(window->contentItem(),"cancelCleanup")->hasActiveFocus();}),"cleanup confirmation initially focuses Cancel");
     if(!captures.isEmpty())window->grabWindow().save(captures+"/16-cleanup-preview.png");
     click("cancelCleanup");check(!cleanupPopup->property("visible").toBool()&&queueWrites==beforePreviewUi,"Cancel leaves the Cider queue untouched");
     click("savedQueueMenuButton");click("deduplicateQueueAction");
@@ -1395,10 +1406,11 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     listeningState.addBookmark();wait([&]{return !listeningState.busy();});check(listeningState.bookmarks().size()==1,"repeated bookmark action deduplicates the same moment");
     {Listening restored(&cider);check(restored.bookmarks()==listeningState.bookmarks(),"bookmarks survive a fresh backend instance");}
     QFile listeningFile(temp+"/listening.json");check(listeningFile.exists()&&!(listeningFile.permissions()&(QFileDevice::ReadGroup|QFileDevice::ReadOther)),"listening references are stored with private permissions");
-    listeningState.playBookmark(bookmarkKey);check(wait([&]{return !listeningState.busy();})&&listeningState.error().isEmpty()&&snapshotPosition==12.345&&seekWrites==1,"bookmark playback verifies the song, seeks, and reads back its position");
+    listeningState.playBookmark(bookmarkKey);check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&listeningState.error().isEmpty()&&snapshotPosition==12.345&&seekWrites==1,"bookmark playback verifies the song, seeks, and reads back its position");
     wrongSong=true;const int beforeWrongSeek=seekWrites;listeningState.playBookmark(bookmarkKey);
+    check(listeningState.busy(),"bookmark mismatch check starts after the previous readback settles");
     check(wait([&]{return !listeningState.busy();})&&!listeningState.error().isEmpty()&&seekWrites==beforeWrongSeek,"bookmark never seeks when Cider reports a different song");wrongSong=false;
-    ignoreSeek=true;listeningState.playBookmark(bookmarkKey);check(wait([&]{return !listeningState.busy();})&&!listeningState.error().isEmpty(),"an acknowledged but ineffective seek is reported honestly");ignoreSeek=false;
+    ignoreSeek=true;listeningState.playBookmark(bookmarkKey);check(listeningState.busy(),"bookmark seek-error check starts a fresh playback operation");check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&!listeningState.error().isEmpty(),"an acknowledged but ineffective seek is reported honestly");ignoreSeek=false;
     snapshotFailure=true;listeningState.addBookmark();check(wait([&]{return !listeningState.busy();})&&listeningState.bookmarks().size()==1,"failed playback snapshot cannot create an invalid bookmark");snapshotFailure=false;
     snapshotId="b";snapshotPosition=12.345;fixtureQueue={queueTrack("a"),queueTrack("b"),queueTrack("c")};fixturePosition=1;syncQueue();
     listeningState.setRememberSession(true);check(wait([&]{return listeningState.session()["trackCount"].toInt()==2;}),"optional checkpoint saves the current and upcoming songs without history");

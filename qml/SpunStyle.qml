@@ -21,6 +21,7 @@ QtObject {
     readonly property real panelRadius: 28 * theme.radius
     readonly property real dialogRadius: 28 * theme.radius
     readonly property real disabledOpacity: .38
+    readonly property real disabledContainerOpacity: .12
     readonly property real hoverOpacity: .08
     readonly property real focusOpacity: .10
     readonly property real pressOpacity: .10

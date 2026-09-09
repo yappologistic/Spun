@@ -191,7 +191,7 @@ ApplicationWindow {
     property real libraryDragY: 0
     property real libraryDragX: 0
     function beginLibraryDrag(tracks) {
-        noticeTimer.stop(); libraryDragTracks = tracks; libraryDragging = true; queueOpen = true
+        actionNotice.dismiss(); libraryDragTracks = tracks; libraryDragging = true; queueOpen = true
         contentItem.forceActiveFocus()
     }
     function updateLibraryDrag(x, y) {
@@ -383,6 +383,7 @@ ApplicationWindow {
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
     }
 
+    Shortcut { sequence: "Alt+G"; enabled: actionNotice.shown && actionNotice.canUndo && !root.menuOpen; onActivated: noticeUndo.forceActiveFocus(Qt.ShortcutFocusReason) }
     Shortcut { sequence: "Ctrl+K"; enabled: !root.menuOpen || quickJump.visible; onActivated: quickJump.visible ? quickJump.close() : root.openQuickJump() }
     Shortcut { sequence: "Space"; enabled: !(root.activeFocusItem instanceof AbstractButton) && !(root.useCider && root.queueOpen && trackList.activeFocus) && !(root.libraryOpen && musicBrowser.item && musicBrowser.item.trackListFocused) && !root.editingText && !root.menuOpen; onActivated: root.useCider ? root.ciderService.toggle() : player.count ? player.toggle() : files.open() }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.editingText && !root.menuOpen; onActivated: root.openMusicLink("", true) }
@@ -1409,6 +1410,7 @@ ApplicationWindow {
             }
             ConnectionButton {
                 objectName: "authorizeCiderButton"
+                filled: !connectionForm.service.authorizing
                 text: connectionForm.service.authorizing ? "Cancel" : "Connect to Cider"
                 onClicked: { if(connectionForm.service.authorizing) connectionForm.service.cancelAuthorization(); else connectionForm.service.authorize() }
             }
@@ -1524,8 +1526,11 @@ ApplicationWindow {
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+        onOpened: if (contentItem.item) contentItem.item.focusCancel()
         contentItem: Loader { active: cleanupPopup.visible; sourceComponent: Item {
-            SpunText { text: cleanupPopup.preview.mode === "selection" ? "Remove selected songs?" : cleanupPopup.preview.mode === "duplicates" ? "Remove duplicates?" : "Clear upcoming?"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            Accessible.role: Accessible.Dialog; Accessible.name: "Queue cleanup"
+            function focusCancel() { cancelCleanup.forceActiveFocus(Qt.TabFocusReason) }
+            SpunText { text: cleanupPopup.preview.mode === "selection" ? "Remove selected songs?" : cleanupPopup.preview.mode === "duplicates" ? "Remove duplicates?" : "Clear upcoming?"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
             SpunText {
                 y: 34; width: parent.width; height: 48; wrapMode: Text.WordWrap
                 text: cleanupPopup.stale ? "The queue changed. Close and preview again." : !(cleanupPopup.preview.rows || []).length ? (cleanupPopup.preview.mode === "duplicates" ? "No upcoming duplicates." : "No upcoming songs.") : (cleanupPopup.preview.rows || []).length + " to remove. Keeps the current song and history."
@@ -1540,7 +1545,7 @@ ApplicationWindow {
                     TrackContent { anchors.fill: parent; app: root; leadingInset: 0; trailingInset: 4; title: modelData.title; subtitle: modelData.artist; artwork: modelData.artwork || ""; fallback: "disc" }
                 }
             }
-            SpunButton { objectName: "cancelCleanup"; x: parent.width - 184; y: parent.height - 40; width: 80; text: "Cancel"; onClicked: cleanupPopup.close() }
+            SpunButton { id: cancelCleanup; objectName: "cancelCleanup"; x: parent.width - 184; y: parent.height - 40; width: 80; text: "Cancel"; onClicked: cleanupPopup.close() }
             SpunButton { objectName: "confirmCleanup"; x: parent.width - width; y: parent.height - 40; width: 96; text: "Remove"; tonal: true; enabled: !cleanupPopup.stale && root.queueControlsReady && (cleanupPopup.preview.rows || []).length > 0; onClicked: { if (cleanupPopup.preview.mode === "selection") root.ciderService.editQueueSelection(cleanupPopup.preview.indices, "remove", cleanupPopup.preview.revision); else root.ciderService.cleanQueue(cleanupPopup.preview.mode, cleanupPopup.preview.revision); cleanupPopup.close() } }
         } }
     }
@@ -1551,6 +1556,7 @@ ApplicationWindow {
         id: savedQueueMenu; parent: jewelCase; x: 30; y: 64; width: 264; padding: 8; popupType: Popup.Item
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         SettingsAction { objectName: "saveQueueAction"; text: "Save queue"; glyphName: "plus"; enabled: root.ciderService.queueReady && !root.ciderService.queueBusy && root.ciderService.queue.length > 0; onTriggered: saveQueuePopup.open() }
         SettingsAction { objectName: "recoverSessionAction"; visible: root.useCider && !!root.listeningService.session.trackCount; text: "Recover session…"; glyphName: "refresh"; enabled: !root.listeningService.busy; onTriggered: root.showRecovery() }
         SettingsAction { objectName: "savedQueuesAction"; text: "Saved queues"; glyphName: "queue"; onTriggered: root.openSavedQueues() }
@@ -1563,29 +1569,36 @@ ApplicationWindow {
         onClosed: renameTarget = ({})
         function submit(name) { if (renameTarget.id ? service.renameSavedQueue(renameTarget, name) : service.saveQueue(name)) close() }
         focus: true; modal: true; popupType: Popup.Item
-        x: (root.layoutWidth - width) / 2; y: 220; width: 330; height: 200; padding: 24
+        x: (root.layoutWidth - width) / 2; y: (root.layoutHeight - height) / 2; width: 360; height: 216; padding: 24
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         contentItem: Loader { active: saveQueuePopup.visible; sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: saveQueuePopup.renameTarget.id ? "Rename saved queue" : "Save queue"
             Component.onCompleted: Qt.callLater(function() { savedQueueName.forceActiveFocus(); if(saveQueuePopup.renameTarget.id)savedQueueName.selectAll() })
-            SpunText { text: saveQueuePopup.renameTarget.id ? "Rename saved queue" : "Save queue"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
-            SpunText { y: 30; text: saveQueuePopup.renameTarget.id ? "Saved locally in Spun" : "Current and upcoming tracks"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
-            SpunSearchField { id: savedQueueName; objectName: "savedQueueName"; app: root; searchIcon: false; rightPadding: 16; Accessible.name: "Queue name"; y: 58; width: parent.width; height: 40; placeholderText: "Queue name"; text: saveQueuePopup.renameTarget.title || ""; maximumLength: 80; onAccepted: if(text.trim().length)saveQueuePopup.submit(text) }
-            SpunButton { objectName: "cancelSaveQueue"; x: parent.width - 168; y: 110; width: 80; text: "Cancel"; onClicked: saveQueuePopup.close() }
-            SpunButton { objectName: "confirmSaveQueue"; x: parent.width - width; y: 110; width: 80; text: "Save"; tonal: true; enabled: savedQueueName.text.trim().length > 0; onClicked: saveQueuePopup.submit(savedQueueName.text) }
+            SpunText { text: saveQueuePopup.renameTarget.id ? "Rename saved queue" : "Save queue"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
+            SpunText { y: 36; text: saveQueuePopup.renameTarget.id ? "Saved locally in Spun" : "Current and upcoming tracks"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+            SpunSearchField { id: savedQueueName; objectName: "savedQueueName"; app: root; searchIcon: false; rightPadding: 16; Accessible.name: "Queue name"; y: 64; width: parent.width; height: 40; placeholderText: "Queue name"; text: saveQueuePopup.renameTarget.title || ""; maximumLength: 80; onAccepted: if(text.trim().length)saveQueuePopup.submit(text) }
+            SpunButton { objectName: "cancelSaveQueue"; x: parent.width - 184; y: parent.height - 40; width: 88; text: "Cancel"; onClicked: saveQueuePopup.close() }
+            SpunButton { objectName: "confirmSaveQueue"; x: parent.width - width; y: parent.height - 40; width: 88; text: saveQueuePopup.renameTarget.id ? "Rename" : "Save"; tonal: true; enabled: savedQueueName.text.trim().length > 0; onClicked: saveQueuePopup.submit(savedQueueName.text) }
         } }
     }
     Popup {
-        id: deleteQueuePopup; focus: true; modal: true; popupType: Popup.Item; property string queueId: ""; property var service: library
-        x: (root.layoutWidth - width) / 2; y: 240; width: 330; height: 132; padding: 24
+        id: deleteQueuePopup; objectName: "deleteQueuePopup"; focus: true; modal: true; popupType: Popup.Item; property string queueId: ""; property var service: library
+        x: (root.layoutWidth - width) / 2; y: (root.layoutHeight - height) / 2; width: 360; height: 196; padding: 24
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+        onOpened: if (contentItem.item) contentItem.item.focusCancel()
         contentItem: Loader { active: deleteQueuePopup.visible; sourceComponent: Item {
-            SpunText { text: "Delete saved queue?"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
-            SpunButton { x: parent.width - 176; y: 42; width: 80; text: "Cancel"; onClicked: deleteQueuePopup.close() }
-            SpunButton { objectName: "confirmDeleteQueue"; x: parent.width - width; y: 42; width: 88; text: "Delete"; tonal: true; onClicked: { deleteQueuePopup.service.deleteSavedQueue(deleteQueuePopup.queueId);deleteQueuePopup.close() } }
+            Accessible.role: Accessible.Dialog; Accessible.name: "Delete saved queue"
+            function focusCancel() { cancelDelete.forceActiveFocus(Qt.TabFocusReason) }
+            SpunText { text: "Delete saved queue?"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
+            SpunText { y: 40; width: parent.width; text: "Removes this saved queue from Spun. Music and the current Cider queue are kept."; wrapMode: Text.WordWrap; color: root.mutedInk; font.pixelSize: SpunStyle.body }
+            SpunButton { id: cancelDelete; objectName: "cancelDeleteQueue"; x: parent.width - 184; y: parent.height - 40; width: 88; text: "Cancel"; onClicked: deleteQueuePopup.close() }
+            SpunButton { objectName: "confirmDeleteQueue"; x: parent.width - width; y: parent.height - 40; width: 88; text: "Delete"; tonal: true; onClicked: { deleteQueuePopup.service.deleteSavedQueue(deleteQueuePopup.queueId);deleteQueuePopup.close() } }
         } }
     }
     Menu {
@@ -1640,13 +1653,13 @@ ApplicationWindow {
         width: 466; height: 530; x: (root.layoutWidth-width)/2; y: (root.layoutHeight-height)/2; padding: 24
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         enter: SpunPopupEnter {}
-        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit } }
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         onOpened: if(contentItem.item)contentItem.item.focusClose()
         onClosed: menuButton.forceActiveFocus(Qt.BacktabFocusReason)
         contentItem: Loader { active: artworkPopup.visible; sourceComponent: Item {
             Accessible.role: Accessible.Dialog; Accessible.name: "Album artwork"
             function focusClose() { artworkClose.forceActiveFocus(Qt.TabFocusReason) }
-            SpunText { width: parent.width-48; text: root.deckPlayer.album || root.deckPlayer.title; elide: Text.ElideRight; color: root.ink; font.pixelSize: SpunStyle.heading }
+            SpunText { width: parent.width-48; text: root.deckPlayer.album || root.deckPlayer.title; elide: Text.ElideRight; color: root.ink; font.pixelSize: SpunStyle.title }
             IconButton { id: artworkClose; objectName: "artworkClose"; anchors.right: parent.right; y: -8; glyphName: "close"; ink: root.ink; tip: "Close · Esc"; onClicked: artworkPopup.close() }
             ArtworkView {
                 id: fullArtwork; objectName: "fullArtwork"; y: 48; width: parent.width; height: parent.height-y; artwork: root.deckPlayer.artwork
@@ -1664,7 +1677,7 @@ ApplicationWindow {
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         contentItem: Loader { active: qualityPopup.visible; sourceComponent: Item {
-            SpunText { text: "Audio quality"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            SpunText { text: "Audio quality"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
             IconButton { x: parent.width - width; y: -8; glyphName: "close"; tip: "Close"; ink: root.mutedInk; onClicked: qualityPopup.close() }
             SpunText { objectName: "audioQualityText"; y: 42; width: parent.width; text: root.ciderService.qualityBusy ? "Checking…" : root.ciderService.audioQuality; color: root.ink; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap }
             IconButton { x: parent.width - width; y: 96; glyphName: "refresh"; tip: "Refresh quality"; ink: root.accent; enabled: !root.ciderService.qualityBusy; onClicked: root.ciderService.refreshAudioQuality() }
@@ -1678,12 +1691,13 @@ ApplicationWindow {
         padding: 24; modal: true; dim: false; focus: true; popupType: Popup.Item
         background: Rectangle { radius: SpunStyle.popupRadius; color: SpunStyle.popup }
         enter: SpunPopupEnter {}
-        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit } }
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         onOpened: if (contentItem.item) contentItem.item.focusCancel()
         onClosed: root.listeningService.cancelRecovery()
         contentItem: Loader { active: recoveryPopup.visible; sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: "Recover session"
             function focusCancel() { recoveryCancel.forceActiveFocus() }
-            SpunText { text: "Recover session"; font.pixelSize: SpunStyle.heading; color: root.ink }
+            SpunText { text: "Recover session"; font.pixelSize: SpunStyle.title; color: root.ink }
             SpunText {
                 y: 38; width: parent.width; height: 112; wrapMode: Text.WordWrap; maximumLineCount: 5; elide: Text.ElideRight
                 font.pixelSize: SpunStyle.body; color: root.mutedInk
@@ -1697,7 +1711,7 @@ ApplicationWindow {
         } }
         Connections { target: root.listeningService; function onFeedback(message, error) { if (recoveryPopup.visible && !error && !root.listeningService.busy) recoveryPopup.close() } }
     }
-    function notifyAction(message, error) { actionNotice.text = message; actionNotice.failed = error; actionNotice.savedUndo = false; actionNotice.undo = !error && message === "Removed from queue" && root.ciderService.canUndoQueue; noticeTimer.interval = error || actionNotice.undo ? 8000 : 2200; noticeTimer.restart() }
+    function notifyAction(message, error) { actionNotice.text = message; actionNotice.failed = error; actionNotice.savedUndo = false; actionNotice.undo = !error && message === "Removed from queue" && root.ciderService.canUndoQueue; noticeTimer.interval = error ? 8000 : 4000; actionNotice.show() }
     Connections {
         target: root.ciderService
         function onApiFeedback(message, error) { root.notifyAction(message,error) }
@@ -1710,29 +1724,54 @@ ApplicationWindow {
     }
     Connections {
         target: root.savedService
-        function onSavedEditCommitted() { actionNotice.savedUndo = true; noticeTimer.interval = 8000; noticeTimer.restart() }
+        function onSavedEditCommitted() { actionNotice.savedUndo = true; actionNotice.show() }
     }
-    Timer { id: noticeTimer }
+    Timer { id: noticeTimer; objectName: "noticeTimer"; onTriggered: actionNotice.dismiss() }
     Rectangle {
         id: actionNotice
         objectName: "actionNotice"
         property string text: ""
+        property bool shown: false
+        property Item returnFocus: null
+        readonly property bool interacting: noticeHover.hovered || noticeUndo.activeFocus || noticeDismiss.activeFocus
+        function syncTimeout() {
+            if (!shown || canUndo || interacting) noticeTimer.stop()
+            else noticeTimer.restart()
+        }
+        function show() { if (!noticeUndo.activeFocus && !noticeDismiss.activeFocus) returnFocus = root.activeFocusItem; shown = true; syncTimeout(); Accessible.announce(text, Accessible.Polite) }
+        function dismiss() {
+            const restore = noticeUndo.activeFocus || noticeDismiss.activeFocus
+            shown = false; noticeTimer.stop()
+            if (restore) {
+                if (returnFocus && returnFocus.visible && returnFocus.enabled) returnFocus.forceActiveFocus(Qt.BacktabFocusReason)
+                else menuButton.forceActiveFocus(Qt.BacktabFocusReason)
+            }
+        }
+        onInteractingChanged: syncTimeout()
+        onCanUndoChanged: syncTimeout()
+        Accessible.role: Accessible.StaticText; Accessible.name: text
         property bool failed: false
         property bool undo: false
         property bool savedUndo: false
         readonly property bool canUndo: savedUndo ? root.savedService.canUndoSavedQueue : undo && root.ciderService.canUndoQueue
-        visible: noticeTimer.running && (!root.miniMode || failed)
+        visible: (shown || opacity > 0) && (!root.miniMode || failed)
+        opacity: shown && (!root.miniMode || failed) ? 1 : 0
+        enabled: shown && (!root.miniMode || failed)
+        Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+        HoverHandler { id: noticeHover }
+        Keys.onShortcutOverride: event => { if (event.key === Qt.Key_Escape) event.accepted = true }
+        Keys.onEscapePressed: dismiss()
         onVisibleChanged: Qt.callLater(root.updateMask)
         z: 30; x: root.miniMode ? 12 : deck.x; y: root.miniMode ? 234 : deck.y + deck.height + 8; width: root.miniMode ? 276 : deck.width; height: root.miniMode ? 56 : 40; radius: SpunStyle.rowRadius
         color: root.surface
         SpunText { x: 12; y: 2; width: noticeDismiss.x - x - 8 - (actionNotice.canUndo ? 80 : 0); height: parent.height - 4; text: actionNotice.text; color: actionNotice.failed ? theme.colors.error : root.ink; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
         SpunButton {
-            objectName: "undoQueueButton"; visible: actionNotice.canUndo
+            id: noticeUndo; objectName: "undoQueueButton"; visible: actionNotice.canUndo
             x: noticeDismiss.x - width - 8; anchors.verticalCenter: parent.verticalCenter; width: 72; height: 40; enabled: actionNotice.savedUndo || root.queueControlsReady
             text: "Undo"
-            onClicked: { noticeTimer.stop(); if(actionNotice.savedUndo)root.savedService.undoSavedQueue();else root.ciderService.undoQueueRemoval() }
+            onClicked: { actionNotice.dismiss(); if(actionNotice.savedUndo)root.savedService.undoSavedQueue();else root.ciderService.undoQueueRemoval() }
         }
-        IconButton { id: noticeDismiss; objectName: "dismissActionNotice"; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Dismiss"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: noticeTimer.stop() }
+        IconButton { id: noticeDismiss; objectName: "dismissActionNotice"; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Dismiss"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: actionNotice.dismiss() }
     }
     component SettingsAction: MenuEntry { app: root }
     component SettingsGap: MenuSeparator {
@@ -1786,10 +1825,11 @@ ApplicationWindow {
         contentItem: Loader {
             active: preferences.visible
             sourceComponent: Item {
+                Accessible.role: Accessible.Dialog; Accessible.name: "Preferences"
                 readonly property real contentHeight: preferenceItems.implicitHeight
                 function focusClose() { closePreferences.forceActiveFocus() }
                 function focusFont() { fontChoice.forceActiveFocus() }
-                SpunText { x: 12; y: 10; text: "Preferences"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+                SpunText { x: 12; y: 6; text: "Preferences"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
                 IconButton { id: closePreferences; objectName: "closePreferences"; anchors.right: parent.right; glyphName: "close"; tip: "Close preferences"; ink: root.ink; onClicked: preferences.close() }
                 Flickable {
                     id: preferenceScroll
@@ -1885,7 +1925,7 @@ ApplicationWindow {
                                     SpunButton {
                                         required property real modelData
                                         objectName: "uiScale" + Math.round(modelData*100)
-                                        width: (parent.width-16)/5; height: 40
+                                        width: (parent.width-16)/5; height: 40; horizontalPadding: 8
                                         text: Math.round(modelData*100)+"%"; tonal: Math.abs(typography.uiScale-modelData)<.001
                                         Accessible.name: "Interface size " + text
                                         Accessible.role: Accessible.RadioButton; Accessible.checked: tonal
@@ -2035,7 +2075,7 @@ ApplicationWindow {
         contentItem: Loader { active: shortcutsPopup.visible; sourceComponent: Item {
             Accessible.role: Accessible.Dialog; Accessible.name: "Keyboard shortcuts"
             function focusClose() { shortcutsClose.forceActiveFocus(Qt.TabFocusReason) }
-            SpunText { text: "Keyboard shortcuts"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            SpunText { text: "Keyboard shortcuts"; color: root.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
             IconButton { id: shortcutsClose; objectName: "shortcutsClose"; anchors.right: parent.right; y: -8; glyphName: "close"; tip: "Close · Esc"; ink: root.mutedInk; onClicked: shortcutsPopup.close() }
             Flickable {
                 id: shortcutScroll; objectName: "shortcutScroll"
@@ -2062,7 +2102,7 @@ ApplicationWindow {
                             ["Ctrl + M", "Mini / full player"], ["Ctrl + B", "Browse Cider music"],
                             ["Ctrl + V", "Open music link"], ["F", "Flip disc"], ["Y", "Lyrics / album tracks"],
                             ["Ctrl / Shift + click", "Select tracks"], ["Ctrl + A / Space", "Select all / toggle*"],
-                            ["Esc", "Back / close"], ["F1", "Keyboard shortcuts"]
+                            ["Alt + G", "Focus Undo notice"], ["Esc", "Back / close"], ["F1", "Keyboard shortcuts"]
                         ]
                         Item {
                             required property var modelData

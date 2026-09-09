@@ -41,9 +41,10 @@ Popup {
     contentItem: Loader {
         active: picker.visible
         sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: "Add to saved queue"
             function focusFirst() { closePicker.forceActiveFocus(Qt.TabFocusReason) }
             IconButton { id: closePicker; objectName: "closeSavedQueuePicker"; x: parent.width - 40; y: -8; glyphName: "close"; tip: "Close"; ink: picker.app.mutedInk; onClicked: picker.close() }
-            SpunText { text: "Add to saved queue"; color: picker.app.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            SpunText { width: parent.width - 44; elide: Text.ElideRight; text: "Add to saved queue"; color: picker.app.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Normal }
             SpunText { y: 30; text: picker.tracks.length + (picker.tracks.length === 1 ? " song selected" : " songs selected"); color: picker.app.mutedInk; font.pixelSize: SpunStyle.caption }
             ListView {
                 id: choices; objectName: "savedQueueChoices"

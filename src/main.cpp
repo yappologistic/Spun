@@ -578,6 +578,13 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         auto *motionSwitch=findItem(window->contentItem(),"motionToggle");
         if (motionSwitch) {
             motionSwitch->forceActiveFocus(Qt::TabFocusReason);
+            const auto switchText=motionSwitch->property("text").toString();
+            motionSwitch->setProperty("text", "Remember the current Cider listening session");QTest::qWait(30);
+            auto *switchLabel=findItem(motionSwitch,"preferenceLabel");
+            check(switchLabel&&switchLabel->property("lineCount").toInt()>1
+                  &&motionSwitch->height()>=switchLabel->implicitHeight()+16,
+                  "long preference labels wrap and expand their row without clipping");
+            motionSwitch->setProperty("text",switchText);QTest::qWait(30);
             const bool priorMotion=player.motion();
             testKeyClick(window,Qt::Key_Space);
             check(player.motion()!=priorMotion,"Preferences switch toggles its setting with Space");
@@ -603,6 +610,13 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
                   "keyboard selection applies the installed font and closes the picker");
             check(window->property("font").value<QFont>().family() == chosen && songTitle->property("font").value<QFont>().family() == chosen,
                   "font choice updates the window and inherited song typography immediately");
+            bool scaleLabelsFit=true;
+            for(const auto *name:{"uiScale85","uiScale100","uiScale115","uiScale125","uiScale150"}) {
+                auto *choice=findItem(window->contentItem(),QString::fromLatin1(name));
+                auto *label=choice?choice->property("contentItem").value<QQuickItem *>():nullptr;
+                scaleLabelsFit &= label&&label->implicitWidth()<=label->width()+.1;
+            }
+            check(scaleLabelsFit,"every interface-size percentage is visible in full");
             capture("00-font-preferences");
             { Typography restored(temp + "/player.ini"); check(restored.selectedFamily() == chosen && restored.family() == chosen, "font choice survives relaunch"); }
             check(!type->select("spun-font-that-does-not-exist") && type->selectedFamily() == chosen, "invalid font choices cannot replace the active font");
@@ -693,6 +707,25 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         check(hoverLayer->opacity() < .001 && hoverLayer->property("color").value<QColor>() == ink,
               "rapid hover reversals settle without changing the hover hue");
     } else check(false, "hover state layer exists");
+    {
+        auto *notice=findItem(window->contentItem(),"actionNotice");
+        auto *timer=window->findChild<QObject *>("noticeTimer");
+        hoverButton->forceActiveFocus(Qt::TabFocusReason);
+        QMetaObject::invokeMethod(window,"notifyAction",Q_ARG(QVariant,QString("Ready to listen")),Q_ARG(QVariant,false));
+        QTest::qWait(200);
+        check(notice&&notice->isVisible()&&hoverButton->hasActiveFocus(),"feedback appears without stealing keyboard focus");
+        check(timer&&timer->property("interval").toInt()==4000,"ordinary feedback allows four seconds to read");
+        capture("26-feedback");
+        timer->setProperty("interval",100);
+        QTest::mouseMove(window,notice->mapToScene(QPointF(80,20)).toPoint());QTest::qWait(200);
+        check(notice->property("shown").toBool()&&!timer->property("running").toBool(),"hovering feedback pauses automatic dismissal");
+        QTest::mouseMove(window,QPoint(15,15));QTest::qWait(350);
+        check(!notice->isVisible(),"feedback fades out after the pointer leaves and timeout finishes");
+        QMetaObject::invokeMethod(window,"notifyAction",Q_ARG(QVariant,QString("Ready to listen")),Q_ARG(QVariant,false));QTest::qWait(200);
+        auto *dismiss=findItem(window->contentItem(),"dismissActionNotice");dismiss->forceActiveFocus(Qt::TabFocusReason);
+        testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
+        check(!notice->isVisible()&&hoverButton->hasActiveFocus(),"Escape dismisses focused feedback and restores the previous control");
+    }
     capture("01-empty");
     window->contentItem()->forceActiveFocus(); testKeyClick(window,Qt::Key_F1); QTest::qWait(250);
     auto *shortcuts=window->findChild<QObject *>("shortcutsPopup");
@@ -709,7 +742,7 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         for(auto *child:item->childItems())collectHelp(child);
     };
     collectHelp(window->contentItem());
-    bool aligned=helpKeys.size()==20&&helpActions.size()==20;
+    bool aligned=helpKeys.size()==21&&helpActions.size()==21;
     for(int i=0;i<helpKeys.size()&&i<helpActions.size();++i)
         aligned &= helpKeys[i]->x()==helpKeys[0]->x()&&helpActions[i]->x()==helpActions[0]->x()
             &&helpKeys[i]->width()+12<=helpActions[i]->x()+.01;

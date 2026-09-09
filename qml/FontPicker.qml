@@ -27,7 +27,8 @@ Popup {
     onAboutToShow: { typography.loadFamilies(); search.text = ""; fonts.currentIndex = -1 }
     onOpened: search.forceActiveFocus()
     contentItem: Item {
-        SpunText { x: 12; y: 10; text: "Font"; color: picker.app.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+        Accessible.role: Accessible.Dialog; Accessible.name: "Font"
+        SpunText { x: 12; y: 6; text: "Font"; color: picker.app.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
         IconButton { objectName: "closeFontPicker"; anchors.right: parent.right; glyphName: "close"; tip: "Close font picker"; ink: picker.app.ink; onClicked: picker.close() }
         SpunSearchField {
             id: search

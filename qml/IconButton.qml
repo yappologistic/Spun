@@ -21,7 +21,7 @@ AbstractButton {
     background: Rectangle {
         SpunSpring { id: cornerMotion; targetValue: Math.min(control.width, control.height) * (control.down ? .35 : .5) }
         radius: cornerMotion.value
-        color: control.fill
+        color: control.enabled ? control.fill : control.fill.a > 0 ? Qt.alpha(theme.colors.text, SpunStyle.disabledContainerOpacity) : "transparent"
         Rectangle {
             anchors.fill: parent; radius: parent.radius; color: SpunStyle.selected
             opacity: control.selected && control.fill.a === 0 ? 1 : 0
@@ -34,7 +34,7 @@ AbstractButton {
     contentItem: Item {
         SpunSpring { id: pressMotion; targetValue: control.down && control.motionEnabled ? .95 : 1; epsilon: .002 }
         scale: pressMotion.value
-        Glyph { anchors.centerIn: parent; width: control.glyphSize; height: width; name: control.glyphName; ink: control.ink; opacity: control.enabled ? 1 : SpunStyle.disabledOpacity }
+        Glyph { anchors.centerIn: parent; width: control.glyphSize; height: width; name: control.glyphName; ink: control.enabled ? control.ink : theme.colors.text; opacity: control.enabled ? 1 : SpunStyle.disabledOpacity }
     }
 
 }

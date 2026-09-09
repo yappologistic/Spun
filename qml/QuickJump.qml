@@ -78,8 +78,9 @@ Popup {
     contentItem: Loader {
         active: jump.visible
         sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: "Quick jump"
             Component.onCompleted: Qt.callLater(function() { search.forceActiveFocus() })
-            SpunText { text: "Quick jump"; color: jump.app.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            SpunText { text: "Quick jump"; color: jump.app.ink; font.pixelSize: SpunStyle.title; font.weight: Font.Medium }
             IconButton { x: parent.width - 36; y: -8; width: 36; height: 36; glyphName: "close"; tip: "Close · Esc"; ink: jump.app.mutedInk; onClicked: jump.close() }
             SpunSearchField {
                 id: search; objectName: "quickJumpSearch"; app: jump.app

@@ -4,7 +4,8 @@ Switch {
     id: control
     required property var app
     property string glyphName: ""
-    implicitHeight: 48
+    implicitHeight: Math.max(48, preferenceLabel.implicitHeight + 16)
+    hoverEnabled: true; focusPolicy: Qt.StrongFocus
     padding: 0; spacing: 0
     font.family: SpunStyle.family; font.pixelSize: SpunStyle.body
     Accessible.name: text
@@ -30,11 +31,12 @@ Switch {
             x: thumbPosition.value - width / 2; anchors.verticalCenter: parent.verticalCenter
             width: thumbSize.value; height: width; radius: width / 2
             color: control.checked ? theme.colors.onAccent : control.app.mutedInk
+            Behavior on color { ColorAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         }
     }
     contentItem: Item {
         opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
         Glyph { x: 12; anchors.verticalCenter: parent.verticalCenter; name: control.glyphName; ink: control.app.mutedInk }
-        SpunText { x: 44; width: control.width - x - 76; anchors.verticalCenter: parent.verticalCenter; text: control.text; font: control.font; color: control.app.ink; elide: Text.ElideRight }
+        SpunText { id: preferenceLabel; objectName: "preferenceLabel"; x: 44; width: control.width - x - 76; anchors.verticalCenter: parent.verticalCenter; text: control.text; font: control.font; color: control.app.ink; wrapMode: Text.WordWrap }
     }
 }
