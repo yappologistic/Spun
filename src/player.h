@@ -18,6 +18,7 @@ struct Track {
 };
 
 struct LoadedArtwork { QImage image; QString file; bool created = false; };
+struct ImportedTracks { QList<Track> tracks; QString firstPath; };
 
 class Player : public QObject {
     Q_OBJECT
@@ -54,6 +55,7 @@ class Player : public QObject {
     Q_PROPERTY(bool miniMode READ miniMode WRITE setMiniMode NOTIFY miniModeChanged)
     Q_PROPERTY(bool backgroundBlur READ backgroundBlur WRITE setBackgroundBlur NOTIFY backgroundBlurChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(QString importStatus READ importStatus NOTIFY importProgressChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
     explicit Player(const QString &settingsPath, QObject *parent = nullptr);
@@ -102,6 +104,7 @@ public:
     bool miniMode() const { return m_miniMode; }
     bool backgroundBlur() const { return m_backgroundBlur; }
     bool busy() const { return m_busy; }
+    QString importStatus() const { return m_importStatus; }
     QString error() const { return m_error; }
     QUrl currentUrl() const;
     QString artworkFile() const { return m_artFile; }
@@ -115,6 +118,7 @@ public:
     void setMiniMode(bool value);
     void setMiniOnTop(bool value);
     Q_INVOKABLE void addUrls(const QList<QUrl> &urls, bool autoplay = true);
+    Q_INVOKABLE void cancelImport();
     Q_INVOKABLE void select(int index, bool autoplay = true);
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void play();
@@ -147,6 +151,7 @@ signals:
     void miniModeChanged();
     void miniOnTopChanged();
     void busyChanged();
+    void importProgressChanged();
     void errorChanged();
     void imported();
 private:
@@ -155,6 +160,8 @@ private:
     void startArtLoad();
     void fail(const QString &message);
     QList<Track> m_tracks;
+    QFutureWatcher<ImportedTracks> m_importJob;
+    QString m_importStatus;
     bool m_tracksDirty = false;
     int m_index = -1;
     QFutureWatcher<void> m_audioPreparation;

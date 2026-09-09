@@ -38,6 +38,9 @@
 #ifdef SPUN_DIAGNOSTICS
 #include <QTest>
 #include <QQuickItemGrabResult>
+#include <QSemaphore>
+#include <QThreadPool>
+#include <QtConcurrent>
 #endif
 #include <QTimer>
 #include <QElapsedTimer>
@@ -113,7 +116,7 @@ public:
         const bool mini = window->property("miniMode").toBool();
         const bool cassette=window->property("cassette").toBool();
         const int targetWidth = mini ? 300 : queue ? 860 : 530;
-        const int targetHeight = mini ? (window->property("showHorizontalSeek").toBool()?382:354) : 730;
+        const int targetHeight = window->property("layoutHeight").toInt();
         const qreal scale=qBound(.5,window->property("uiScale").toDouble(),1.5);
         QTransform zoom;zoom.scale(scale,scale);
         const auto setMask=[&](const QRegion &region){window->setMask(zoom.map(region));};
@@ -404,7 +407,7 @@ static int exerciseCiderQueue(const QString &temp) {
 }
 
 static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *window,
-                    const QString &temp, const QString &captures, bool live) {
+                    const QString &temp, const QString &captures, bool live, bool importOnly = false) {
     int failures = 0;
     auto check = [&](bool ok, const char *message) {
         std::cout << (ok ? "PASS " : "FAIL ") << message << std::endl;
@@ -428,6 +431,38 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         QDir().mkpath(captures); QTest::qWait(300);
         check(window->grabWindow().save(captures + "/" + name + ".png"), "capture saved");
     };
+    {
+        auto *pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int threads = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore started, release;
+        auto blockedWorker = QtConcurrent::run([&] { started.release(); release.acquire(); });
+        started.acquire();
+        player.addUrls({QUrl::fromLocalFile(QStringLiteral(SPUN_SOURCE_DIR "/assets/First-Light.flac"))}, false);
+        QTest::qWait(150);
+        auto *notice = findItem(window->contentItem(), "actionNotice");
+        auto *cancel = findItem(window->contentItem(), "cancelImportButton");
+        check(player.busy() && notice && notice->isVisible() && cancel && cancel->isVisible(), "local import shows progress and cancellation");
+        capture("26-folder-import-progress");
+        window->setProperty("miniMode", true); QTest::qWait(150);
+        check(notice && notice->isVisible() && cancel && cancel->isVisible(), "mini player keeps import cancellation accessible");
+        auto *controls = findItem(window->contentItem(), "miniControls");
+        check(notice && controls && notice->y() >= controls->y() + controls->height()
+              && notice->y() + notice->height() <= window->property("layoutHeight").toReal(), "mini import progress sits below controls within the window");
+        check(cancel && window->mask().contains(cancel->mapToScene(QPointF(40,20)).toPoint()), "mini import Cancel stays inside the window input region");
+        capture("26-mini-import-progress");
+        click("cancelImportButton");
+        release.release(); blockedWorker.waitForFinished(); pool->setMaxThreadCount(threads);
+        check(waitFor([&] { return !player.busy(); }) && player.count() == 0, "import Cancel button discards pending songs");
+        window->setProperty("miniMode", false); QTest::qWait(150);
+        check(notice && notice->property("text").toString() == "Import cancelled", "import cancellation shows completion feedback");
+        QMetaObject::invokeMethod(notice, "dismiss");
+    }
+    if (importOnly) {
+        std::cout << "IMPORT UI RESULT " << failures << " failures" << std::endl;
+        return failures ? 1 : 0;
+    }
     const auto parsed=Lyrics::parse("[offset:250]\n[00:01.00][00:03.50]A quiet room\n[00:05.00]An open window");
     check(parsed.size()==3 && parsed[1].toMap()["start"].toLongLong()==3750 && Lyrics::indexAt(parsed,1300)==0 && Lyrics::indexAt(parsed,3900)==1, "LRC offsets and repeated timestamps align with playback");
     check(Lyrics::parse("First line\nSecond line").size()==2 && Lyrics::indexAt(Lyrics::parse("Plain words"),5000)==-1, "plain lyrics remain readable without invented timing");
@@ -1441,7 +1476,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--self-test" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--self-test" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1470,6 +1505,7 @@ int main(int argc, char **argv) {
     parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"test-library", "Run isolated music browser checks"});
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
+    parser.addOption({"test-import-ui", "Run isolated folder import UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
     parser.addOption({"verify-cider", "Verify a live Cider connection, briefly testing and restoring playback"});
     parser.addOption({"verify-cider-writes", "Exercise live Cider controls, reversible queue/audio edits and start song radio"});
@@ -1481,7 +1517,7 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("benchmark") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
     if (!test && !parser.isSet("config")) {
         auto bus = QDBusConnection::sessionBus();
         if (bus.interface() && bus.interface()->isServiceRegistered("org.mpris.MediaPlayer2.spun")) {
@@ -1959,7 +1995,7 @@ int main(int argc, char **argv) {
     });
     else if (parser.isSet("test-library")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
     else if (test) QTimer::singleShot(650, &app, [&] {
-        app.exit(exercise(player, theme, lyrics, window, temp.path(), parser.value("capture-dir"), parser.isSet("smoke-live")));
+        app.exit(exercise(player, theme, lyrics, window, temp.path(), parser.value("capture-dir"), parser.isSet("smoke-live"), parser.isSet("test-import-ui")));
     });
 #endif
     else if (!parser.positionalArguments().isEmpty()) {

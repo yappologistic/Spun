@@ -50,7 +50,7 @@ Other Linux distributions need a C++20 compiler, CMake 3.22+, Ninja, pkg-config,
 
 ## Start listening
 
-**Local music:** choose **Local**, then **+** to add tracks. You can also drop audio files or a folder onto Spun. Folder imports include the audio files directly inside that folder. Your music files are not modified. **More → Play demo** plays the included original soundcheck.
+**Local music:** choose **Local**, then **+** to add tracks. You can also drop audio files or a folder onto Spun. Use **More → Add music folder** to include songs in artist and album subfolders. Spun shows import progress, skips songs already in the queue, and lets you cancel without adding a partial import. Directory symlinks inside the folder are not followed. Your music files are not copied or modified. **More → Play demo** plays the included original soundcheck.
 
 **Apple Music through Cider:** open Cider, sign in there, and choose **Cider** in Spun. Cider still handles authentication and streaming and must remain running. Apple Music playback requires the appropriate Apple Music access through Cider.
 
@@ -184,6 +184,8 @@ Build the diagnostic companion and run isolated playback, API-fixture and UI che
 ./scripts/build.sh -DBUILD_TESTING=ON
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QSG_RENDER_LOOP=basic QT_QPA_PLATFORMTHEME= ./build/spun --self-test
 ```
+
+For recursive folder-import checks, run `QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= ./build/spun-import-test`. Add `--stress` to test 20,000 nested sparse WAV files representing 625 GiB of audio without allocating that much disk space. The temporary files are removed after the run.
 
 The tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. The normal player is built separately from the diagnostic executable.
 

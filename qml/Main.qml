@@ -9,7 +9,9 @@ ApplicationWindow {
     title: "Spun"
     visible: true
     readonly property real layoutWidth: miniMode ? 300 : sideOpen ? 860 : 530
-    readonly property real layoutHeight: miniMode ? (showHorizontalSeek ? 382 : 354) : 730
+    readonly property real miniBaseHeight: showHorizontalSeek ? 382 : 354
+    readonly property real layoutHeight: miniMode ? miniBaseHeight + (actionNotice.visible ? 48 : 0) : 730
+    onLayoutHeightChanged: Qt.callLater(updateMask)
     readonly property real uiScale: testMode ? typography.uiScale : Math.min(typography.uiScale,
         Math.max(.5, (Screen.desktopAvailableWidth - 40) / layoutWidth),
         Math.max(.5, (Screen.desktopAvailableHeight - 40) / layoutHeight))
@@ -414,7 +416,7 @@ ApplicationWindow {
         nameFilters: ["Music (*.mp3 *.flac *.wav *.ogg *.opus *.m4a *.aac *.aiff *.aif *.wma)", "All files (*)"]
         onAccepted: { root.useLocal(); player.addUrls(selectedFiles) }
     }
-    FolderDialog { id: folder; title: "Add an album folder"; onAccepted: { root.useLocal(); player.addUrls([selectedFolder], player.count === 0) } }
+    FolderDialog { id: folder; title: "Add a music folder"; onAccepted: { root.useLocal(); player.addUrls([selectedFolder], player.count === 0) } }
     FileDialog { id: cover; title: "Choose the disc artwork"; nameFilters: ["Artwork (*.jpg *.jpeg *.png *.webp)"]; onAccepted: player.setCover(selectedFile) }
 
     Timer {
@@ -1473,7 +1475,7 @@ ApplicationWindow {
                 onClicked: root.ciderService.raise()
             }
             IconButton { visible: !root.useCider; x: 0; anchors.verticalCenter: parent.verticalCenter; glyphName: "plus"; tip: "Add tracks"; ink: root.ink; hoverFill: root.hoverFill; onClicked: files.open() }
-            IconButton { visible: !root.useCider; x: SpunStyle.target + SpunStyle.smallGap; anchors.verticalCenter: parent.verticalCenter; glyphName: "folder"; tip: "Add album folder"; ink: root.ink; hoverFill: root.hoverFill; onClicked: folder.open() }
+            IconButton { visible: !root.useCider; x: SpunStyle.target + SpunStyle.smallGap; anchors.verticalCenter: parent.verticalCenter; glyphName: "folder"; tip: "Add music folder"; ink: root.ink; hoverFill: root.hoverFill; onClicked: folder.open() }
             Button {
                 id: clearQueueButton
                 visible: !root.useCider; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: 76; height: SpunStyle.target
@@ -1726,6 +1728,14 @@ ApplicationWindow {
         target: root.savedService
         function onSavedEditCommitted() { actionNotice.savedUndo = true; actionNotice.show() }
     }
+    Connections {
+        target: player
+        function onBusyChanged() {
+            if (player.busy) actionNotice.dismiss()
+            else if (noticeCancel.activeFocus) menuButton.forceActiveFocus(Qt.TabFocusReason)
+        }
+        function onImported() { root.notifyAction(player.error || player.importStatus, player.error.length > 0) }
+    }
     Timer { id: noticeTimer; objectName: "noticeTimer"; onTriggered: actionNotice.dismiss() }
     Rectangle {
         id: actionNotice
@@ -1733,9 +1743,10 @@ ApplicationWindow {
         property string text: ""
         property bool shown: false
         property Item returnFocus: null
-        readonly property bool interacting: noticeHover.hovered || noticeUndo.activeFocus || noticeDismiss.activeFocus
+        readonly property bool importing: player.busy
+        readonly property bool interacting: noticeHover.hovered || noticeUndo.activeFocus || noticeDismiss.activeFocus || noticeCancel.activeFocus
         function syncTimeout() {
-            if (!shown || canUndo || interacting) noticeTimer.stop()
+            if (!shown || importing || canUndo || interacting) noticeTimer.stop()
             else noticeTimer.restart()
         }
         function show() { if (!noticeUndo.activeFocus && !noticeDismiss.activeFocus) returnFocus = root.activeFocusItem; shown = true; syncTimeout(); Accessible.announce(text, Accessible.Polite) }
@@ -1749,29 +1760,36 @@ ApplicationWindow {
         }
         onInteractingChanged: syncTimeout()
         onCanUndoChanged: syncTimeout()
-        Accessible.role: Accessible.StaticText; Accessible.name: text
+        onImportingChanged: syncTimeout()
+        Accessible.role: Accessible.StaticText; Accessible.name: importing ? player.importStatus : text
         property bool failed: false
         property bool undo: false
         property bool savedUndo: false
         readonly property bool canUndo: savedUndo ? root.savedService.canUndoSavedQueue : undo && root.ciderService.canUndoQueue
-        visible: (shown || opacity > 0) && (!root.miniMode || failed)
-        opacity: shown && (!root.miniMode || failed) ? 1 : 0
-        enabled: shown && (!root.miniMode || failed)
+        visible: importing || (shown || opacity > 0) && (!root.miniMode || failed)
+        opacity: importing || shown && (!root.miniMode || failed) ? 1 : 0
+        enabled: importing || shown && (!root.miniMode || failed)
         Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         HoverHandler { id: noticeHover }
         Keys.onShortcutOverride: event => { if (event.key === Qt.Key_Escape) event.accepted = true }
-        Keys.onEscapePressed: dismiss()
+        Keys.onEscapePressed: { if (importing) player.cancelImport(); else dismiss() }
         onVisibleChanged: Qt.callLater(root.updateMask)
-        z: 30; x: root.miniMode ? 12 : deck.x; y: root.miniMode ? 234 : deck.y + deck.height + 8; width: root.miniMode ? 276 : deck.width; height: root.miniMode ? 56 : 40; radius: SpunStyle.rowRadius
+        z: 30; x: root.miniMode ? 12 : deck.x; y: root.miniMode ? root.miniBaseHeight + 4 : deck.y + deck.height + 8; width: root.miniMode ? 276 : deck.width; height: 40; radius: SpunStyle.rowRadius
         color: root.surface
-        SpunText { x: 12; y: 2; width: noticeDismiss.x - x - 8 - (actionNotice.canUndo ? 80 : 0); height: parent.height - 4; text: actionNotice.text; color: actionNotice.failed ? theme.colors.error : root.ink; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+        SpunText { x: 12; y: 2; width: (actionNotice.importing ? noticeCancel.x : noticeDismiss.x - (actionNotice.canUndo ? 80 : 0)) - x - 8; height: parent.height - 4; text: actionNotice.importing ? player.importStatus : actionNotice.text; color: !actionNotice.importing && actionNotice.failed ? theme.colors.error : root.ink; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
         SpunButton {
-            id: noticeUndo; objectName: "undoQueueButton"; visible: actionNotice.canUndo
+            id: noticeUndo; objectName: "undoQueueButton"; visible: actionNotice.canUndo && !actionNotice.importing
             x: noticeDismiss.x - width - 8; anchors.verticalCenter: parent.verticalCenter; width: 72; height: 40; enabled: actionNotice.savedUndo || root.queueControlsReady
             text: "Undo"
             onClicked: { actionNotice.dismiss(); if(actionNotice.savedUndo)root.savedService.undoSavedQueue();else root.ciderService.undoQueueRemoval() }
         }
-        IconButton { id: noticeDismiss; objectName: "dismissActionNotice"; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Dismiss"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: actionNotice.dismiss() }
+        SpunButton {
+            id: noticeCancel; objectName: "cancelImportButton"; visible: actionNotice.importing
+            anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter
+            width: 80; height: 40; text: "Cancel"
+            onClicked: { menuButton.forceActiveFocus(Qt.TabFocusReason); player.cancelImport() }
+        }
+        IconButton { id: noticeDismiss; objectName: "dismissActionNotice"; visible: !actionNotice.importing; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Dismiss"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: actionNotice.dismiss() }
     }
     component SettingsAction: MenuEntry { app: root }
     component SettingsGap: MenuSeparator {
@@ -1793,7 +1811,7 @@ ApplicationWindow {
         onOpened: {  if (root.useCider) root.ciderService.refreshModes() }
 
         SettingsAction { text: "Add tracks"; glyphName: "plus"; hint: "Ctrl+O"; onTriggered: files.open() }
-        SettingsAction { text: "Add album folder"; glyphName: "folder"; hint: "Ctrl+Shift+O"; onTriggered: folder.open() }
+        SettingsAction { text: "Add music folder"; glyphName: "folder"; hint: "Ctrl+Shift+O"; onTriggered: folder.open() }
         SettingsAction { text: "Change artwork"; glyphName: "artwork"; enabled: !root.useCider && player.count > 0; onTriggered: cover.open() }
         SettingsGap {}
         SettingsAction { objectName: "quickJumpAction"; text: "Quick jump"; hint: "Ctrl+K"; glyphName: "search"; onTriggered: root.openQuickJump() }
@@ -2097,7 +2115,7 @@ ApplicationWindow {
                         model: [
                             ["Space", "Play / pause"], ["← / →", "Seek 5 seconds"], ["Shift + drag", "Fine seeking"],
                             ["Ctrl + ← / →", "Previous / next"], ["↑ / ↓", "Volume"], ["M", "Mute"],
-                            ["Ctrl + O", "Add music"], ["Ctrl + Shift + O", "Add album folder"],
+                            ["Ctrl + O", "Add music"], ["Ctrl + Shift + O", "Add music folder"],
                             ["Ctrl + L", "Show queue"], ["Ctrl + F", "Search panel"], ["Ctrl + K", "Quick jump"],
                             ["Ctrl + M", "Mini / full player"], ["Ctrl + B", "Browse Cider music"],
                             ["Ctrl + V", "Open music link"], ["F", "Flip disc"], ["Y", "Lyrics / album tracks"],

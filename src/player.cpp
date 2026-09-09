@@ -1,6 +1,8 @@
 #include "player.h"
 #include "artwork.h"
 #include <QDir>
+#include <QDirIterator>
+#include <QElapsedTimer>
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QFutureWatcher>
@@ -80,6 +82,8 @@ Player::Player(const QString &settingsPath, QObject *parent)
 }
 
 Player::~Player() {
+    m_importJob.cancel();
+    m_importJob.waitForFinished();
     save();
     if (m_preparingAudio) m_audioPreparation.waitForFinished();
     // No worker keeps a Player pointer. Finish its bounded cache write before exit.
@@ -150,50 +154,109 @@ Track Player::readTrack(const QString &path) {
     }
     return t;
 }
+void Player::cancelImport() {
+    if (!m_busy) return;
+    m_importJob.cancel();
+    m_importStatus = "Cancelling import";
+    emit importProgressChanged();
+}
 void Player::addUrls(const QList<QUrl> &urls, bool autoplay) {
-    if (m_busy) { fail("Still adding music. Please try again in a moment."); return; }
-    m_busy = true;
+    if (m_busy) return;
     dismissError();
+    m_importStatus = "Finding songs";
+    m_busy = true;
+    emit importProgressChanged();
     emit busyChanged();
-    auto *watcher = new QFutureWatcher<QList<Track>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, autoplay] {
-        const auto tracks = watcher->result();
-        watcher->deleteLater();
-        const int firstNew = count();
-        QSet<QString> existingPaths;
-        existingPaths.reserve(count() + tracks.size());
-        for (const auto &track : m_tracks) existingPaths.insert(track.path);
-        for (const auto &t : tracks) {
-            if (!t.path.isEmpty() && !existingPaths.contains(t.path)) {
-                existingPaths.insert(t.path);
-                m_tracks.append(t);
+    QSet<QString> existingPaths;
+    existingPaths.reserve(count());
+    for (const auto &track : m_tracks) existingPaths.insert(track.path);
+    // Reuse one watcher; its connections belong to this import only.
+    m_importJob.disconnect(this);
+    connect(&m_importJob, &QFutureWatcherBase::progressTextChanged, this, [this](const QString &status) {
+        if (m_importJob.isCanceled() || status.isEmpty()) return;
+        m_importStatus = status;
+        emit importProgressChanged();
+    });
+    connect(&m_importJob, &QFutureWatcherBase::finished, this, [this, autoplay] {
+        if (m_importJob.isCanceled()) {
+            m_importStatus = "Import cancelled";
+        } else {
+            auto result = m_importJob.future().takeResult();
+            const int firstNew = count();
+            m_tracks.append(std::move(result.tracks));
+            if (count() > firstNew) {
+                emit queueChanged();
+                if (m_index < 0 || autoplay) select(firstNew, autoplay);
+                m_importStatus = QString("Added %1 %2").arg(count() - firstNew).arg(count() - firstNew == 1 ? "song" : "songs");
+            } else if (!result.firstPath.isEmpty()) {
+                m_importStatus = "These songs are already in the queue";
+                if (autoplay) {
+                    for (int i = 0; i < count(); ++i) if (m_tracks[i].path == result.firstPath) { select(i); break; }
+                }
+            } else {
+                m_importStatus = "No supported audio found";
+                fail("No supported audio found. Try MP3, FLAC, WAV, OGG, Opus or M4A.");
             }
+            save();
         }
         m_busy = false;
+        emit importProgressChanged();
         emit busyChanged();
-        emit queueChanged();
-        if (count() > firstNew && (m_index < 0 || autoplay)) select(firstNew, autoplay);
-        else if (autoplay && !tracks.isEmpty()) {
-            for (int i = 0; i < count(); ++i) if (m_tracks[i].path == tracks.first().path) { select(i); break; }
-        }
-        else if (tracks.isEmpty()) fail("No supported audio found. Try MP3, FLAC, WAV, OGG, Opus or M4A.");
-        save();
         emit imported();
     });
-    watcher->setFuture(QtConcurrent::run([urls] {
+    m_importJob.setFuture(QtConcurrent::run([urls, existingPaths](QPromise<ImportedTracks> &promise) {
         QStringList paths;
+        QSet<QString> seen = existingPaths;
+        ImportedTracks result;
+        QElapsedTimer progress;
+        progress.start();
+        auto addFile = [&](const QFileInfo &info) {
+            if (!info.isFile() || !info.isReadable() || !supported(info.filePath())) return;
+            const auto path = info.canonicalFilePath();
+            if (path.isEmpty()) return;
+            if (result.firstPath.isEmpty()) result.firstPath = path;
+            if (!seen.contains(path)) { seen.insert(path); paths.append(path); }
+        };
+        int visited = 0;
+        promise.setProgressRange(0, 0);
         for (const auto &url : urls) {
+            if (promise.isCanceled()) return;
             if (!url.isLocalFile()) continue;
-            QFileInfo info(url.toLocalFile());
+            const QFileInfo info(url.toLocalFile());
             if (info.isDir()) {
-                const auto entries = QDir(info.absoluteFilePath()).entryInfoList(QDir::Files | QDir::Readable, QDir::Name | QDir::IgnoreCase);
-                for (const auto &entry : entries) if (supported(entry.filePath())) paths.append(entry.filePath());
-            } else if (info.isFile() && supported(info.filePath())) paths.append(info.absoluteFilePath());
+                // Do not follow directory symlinks into cycles or outside the chosen tree.
+                QDirIterator entries(info.absoluteFilePath(), QDir::Files | QDir::Readable | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+                QStringList folderPaths;
+                while (entries.hasNext()) {
+                    if (promise.isCanceled()) return;
+                    entries.next();
+                    const auto entry = entries.fileInfo();
+                    if (supported(entry.filePath())) folderPaths.append(entry.filePath());
+                    if (++visited % 128 == 0 && progress.elapsed() >= 100) {
+                        promise.setProgressValueAndText(0, QString("Finding songs: %1 files checked").arg(visited));
+                        progress.restart();
+                    }
+                }
+                std::sort(folderPaths.begin(), folderPaths.end(), [](const QString &a, const QString &b) {
+                    const auto order = QString::compare(a, b, Qt::CaseInsensitive);
+                    return order == 0 ? a < b : order < 0;
+                });
+                for (const auto &path : folderPaths) {
+                    if (promise.isCanceled()) return;
+                    addFile(QFileInfo(path));
+                }
+            } else addFile(info);
         }
-        paths.removeDuplicates();
-        QList<Track> result;
-        for (const auto &path : paths) result.append(readTrack(path));
-        return result;
+        promise.setProgressRange(0, paths.size());
+        result.tracks.reserve(paths.size());
+        for (int i = 0; i < paths.size(); ++i) {
+            if (promise.isCanceled()) return;
+            promise.setProgressValueAndText(i, QString("Reading songs: %1 of %2").arg(i + 1).arg(paths.size()));
+            auto track = readTrack(paths[i]);
+            if (!track.path.isEmpty()) result.tracks.append(std::move(track));
+        }
+        promise.setProgressValue(paths.size());
+        promise.addResult(std::move(result));
     }));
 }
 void Player::select(int index, bool autoplay) {
@@ -324,6 +387,7 @@ void Player::remove(int index) {
     save();
 }
 void Player::clear() {
+    cancelImport();
     stop();
     if (m_media) m_media->setSource(QUrl());
     m_tracks.clear();
