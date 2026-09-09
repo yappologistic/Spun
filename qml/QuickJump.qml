@@ -16,10 +16,10 @@ Popup {
     }
     objectName: "quickJump"
     parent: Overlay.overlay
-    x: (parent.width - width) / 2
-    y: Math.max(12, (app.height - 430) / 2)
-    width: Math.min(440, app.width - 24)
-    height: Math.min(430, app.height - 24, Math.max(214, 126 + Math.max(1, results.length) * 66 + (notice.length ? 50 : 0)))
+    x: ((app.layoutWidth || app.width) - width) / 2
+    y: Math.max(12, ((app.layoutHeight || app.height) - 430) / 2)
+    width: Math.min(440, (app.layoutWidth || app.width) - 24)
+    height: Math.min(430, (app.layoutHeight || app.height) - 24, Math.max(214, 126 + Math.max(1, results.length) * 66 + (notice.length ? 50 : 0)))
     Behavior on height { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.standardCurve } }
     padding: 16; focus: true; modal: true; dim: false; popupType: Popup.Item
     background: Rectangle { radius: SpunStyle.popupRadius; color: SpunStyle.popup }

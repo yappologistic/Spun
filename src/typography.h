@@ -11,6 +11,7 @@ class Typography : public QObject {
     Q_PROPERTY(QString systemFamily READ systemFamily CONSTANT)
     Q_PROPERTY(bool missing READ missing NOTIFY changed)
     Q_PROPERTY(QStringList families READ families NOTIFY familiesChanged)
+    Q_PROPERTY(qreal uiScale READ uiScale WRITE setUiScale NOTIFY scaleChanged)
 public:
     explicit Typography(const QString &settingsPath, QObject *parent = nullptr);
     QString selectedFamily() const { return m_selected; }
@@ -20,13 +21,17 @@ public:
     QStringList families() const { return m_families; }
     Q_INVOKABLE void loadFamilies();
     Q_INVOKABLE bool select(const QString &family);
+    qreal uiScale() const { return m_scale; }
+    void setUiScale(qreal scale);
 signals:
     void changed();
     void familiesChanged();
+    void scaleChanged();
 private:
     void resolve();
     QSettings m_settings;
     QString m_selected, m_family, m_system;
     QStringList m_families;
     bool m_loaded = false;
+    qreal m_scale = 1;
 };

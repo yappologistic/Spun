@@ -27,7 +27,8 @@
 
 !/assets/
 /assets/*
-!/assets/spun.svg
+!/assets/spun-icon.png
+!/assets/spun-window.png
 !/assets/First-Light.flac
 !/assets/screenshots/
 /assets/screenshots/*

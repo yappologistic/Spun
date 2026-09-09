@@ -19,6 +19,7 @@ public:
     void setEnabled(bool enabled);
     void setVolume(qreal volume);
     Q_INVOKABLE void observe(const QString &source, const QString &key);
+    Q_INVOKABLE void transport();
     static QByteArray synthesize(const QAudioFormat &format);
 signals:
     void changed();

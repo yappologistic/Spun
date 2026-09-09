@@ -1,6 +1,6 @@
 <h1 align="center">Spun</h1>
 
-<p align="center">A CD and vinyl music player for Linux.</p>
+<p align="center">A CD, vinyl and cassette music player for Linux.</p>
 
 <p align="center">
   <img src="assets/screenshots/spun-vinyl.png" alt="Spun in vinyl mode with a gold tonearm and the Cider queue alongside it" width="1000">
@@ -102,8 +102,13 @@ Spun connects to Cider's local API on port 10767. Basic playback controls use Li
 - **Audio quality:** choose **Audio quality** in the current song’s **⋯** menu. Spun displays the quality Cider reports and labels device output separately; it does not infer lossless or Atmos from device support. Details are fetched only when opened or refreshed.
 - **Copy song link:** use **Copy song link** in the current song, browser or Cider queue’s **⋯** menu. Library songs use their public catalog identity; uploaded or unavailable songs may have no shareable link.
 - **Music links:** paste an Apple Music song, album, playlist or station link into search, or drop it on the player. Spun shows the result before you choose playback.
+- **Interface size:** choose 85–150% in **Preferences → Interface size**. Text, controls and artwork scale together; large layouts fit the available screen.
+- **Fine seeking:** hold **Shift** while dragging a progress bar, the disc rim or vinyl needle. Progress bars preview your position and seek on release; **Esc** cancels. Cassette reels wind with the preview and respect reduced motion and the cassette sound preference.
+- **Artwork:** choose **View artwork** from the player's **⋯** menu to inspect the full cover without the disc cutout.
+- **Queue browsing:** scrolling away keeps your place when playback advances. **Current song** returns to the playing track and resumes following it.
 - **Disc reverse:** double-click the disc or press **F** to see album details and tracks. Switch to lyrics with **Y** when available. Local lyrics can come from matching `.lrc` / `.txt` files or embedded metadata.
-- **Disc appearance:** choose **CD** or **Vinyl** in **More → Preferences**. Vinyl keeps the artwork on its center label, with grooves, a small spindle hole, and a gold tonearm. The arm lowers for playback, tracks inward through the song, and parks on pause. It scales with Mini mode, stays out of the reverse view and disc swaps, and respects reduced motion. Both styles share playback, reverse, lyrics, the progress ring, disc swaps and mini mode. Your choice is remembered.
+- **Disc appearance:** choose **CD**, **Vinyl** or **Cassette** in **More → Preferences**. Vinyl keeps the artwork on its center label, with grooves, a small spindle hole, and a gold tonearm. The arm lowers for playback, tracks inward through the song, and parks on pause. It scales with Mini mode, stays out of the reverse view and disc swaps, and respects reduced motion. Cassette mode adds a tape shell, animated reels, a horizontal progress bar and optional transport sounds. All three styles share playback, reverse-side details, lyrics and Mini mode. Your choice is remembered.
+- **Vinyl controls:** choose 33⅓ or 45 RPM, enable a horizontal progress bar, or add optional crackle, hiss and groove skips in Preferences. Drag the needle onto the grooves to seek and play.
 - **Mini mode:** a little disc with controls underneath. Optionally keep it above other windows in Preferences. Hover or keyboard-focus **Next** to preview the upcoming artwork, title and artist. Cider’s queue is checked on demand; an unknown next track is shown honestly, including local shuffle. No extra polling runs while the preview is closed.
 
 **More → Preferences** contains CD/Vinyl appearance, the font picker, background blur, disc animation and other playback options. Spun follows Noctalia's colors and reduced-motion preference when available. Hyprland integration depends on the compositor's supported interfaces.

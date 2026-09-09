@@ -20,7 +20,10 @@ void TapeSound::setVolume(qreal volume) {
 void TapeSound::observe(const QString &source,const QString &key) {
     const bool transition=!key.isEmpty()&&!m_key.isEmpty()&&source==m_source&&key!=m_key;
     m_source=source;m_key=key;
-    if(!transition || !m_enabled || m_volume<=0 || (m_lastCue.isValid()&&m_lastCue.elapsed()<160))return;
+    if(transition)transport();
+}
+void TapeSound::transport() {
+    if(!m_enabled || m_volume<=0 || (m_lastCue.isValid()&&m_lastCue.elapsed()<160))return;
     m_lastCue.restart();emit triggered();
     if(m_outputEnabled)play();
 }

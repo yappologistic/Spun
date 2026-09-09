@@ -27,6 +27,7 @@ Menu {
     enter: SpunPopupEnter {}
     exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
     component Entry: MenuEntry { app: menu.app }
+    Entry { objectName: "inspectArtworkAction"; visible: menu.currentSong; text: "View artwork"; glyphName: "artwork"; onTriggered: menu.app.showArtwork() }
     Entry {
         objectName: "playNextAction"
         visible: !menu.currentSong && !menu.station && !menu.artist; text: menu.batch ? "Play next · " + menu.selectionBatch.length : "Play next"; glyphName: "next"

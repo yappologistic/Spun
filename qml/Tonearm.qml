@@ -11,7 +11,7 @@ Item {
     property bool dragging: false
     property real dragAngle: -4
     property real rawAngle: -4
-    property real grabOffset: 0
+    property real lastPointerAngle: 0
     property real pointerDistance: 210
     property string dragTrack: ""
     property bool wasPlaying: false
@@ -68,10 +68,11 @@ Item {
         liftMotion.complete(); angleSpring.complete()
     }
     SpunToolTip {
+        objectName: "needleToolTip"
         parent: arm; x: 184; y: 60
-        visible: needleHit.containsMouse || needleHit.activeFocus
+        visible: arm.canSeek && arm.app.visible && (arm.dragging || (!needleHit.hintDismissed && needleHit.hoveringNeedle) || (needleHit.activeFocus && !needleHit.pointerFocus))
         delay: arm.dragging ? 0 : 650
-        text: arm.dragging ? arm.app.time(arm.previewProgress * arm.app.deckPlayer.duration) : "Drag the needle to seek"
+        text: arm.dragging ? arm.app.time(arm.previewProgress * arm.app.deckPlayer.duration) : "Drag to seek · Shift for precision"
     }
     // The pivot rests at the record's edge; the stylus stays outside the label.
     Item {
@@ -121,6 +122,7 @@ Item {
         Rectangle { x: -7; y: -7; width: 14; height: 14; radius: 7; color: arm.gold; border.width: 1; border.color: arm.glint }
         Rectangle { x: -3; y: -1; width: 6; height: 2; radius: 1; rotation: -35; color: arm.shade }
     }
+    HoverHandler { id: needleHover; blocking: false; onHoveredChanged: if (!hovered) needleHit.hintDismissed = false }
     // Pointer coordinates must stay fixed while the shaft rotates beneath them.
     MouseArea {
         id: needleHit; objectName: "needleHandle"
@@ -128,6 +130,11 @@ Item {
         enabled: arm.canSeek; hoverEnabled: true; preventStealing: true
         acceptedButtons: Qt.LeftButton
         activeFocusOnTab: true
+        property bool pointerFocus: false
+        property bool hintDismissed: false
+        readonly property bool hoveringNeedle: needleHover.hovered && Math.hypot(needleHover.point.position.x-tip.x, needleHover.point.position.y-tip.y) <= 27
+        onHoveringNeedleChanged: if (!hoveringNeedle) hintDismissed = false
+        onActiveFocusChanged: if (!activeFocus) pointerFocus = false
         readonly property point tip: {
             const angle = arm.armAngle * Math.PI / 180
             return Qt.point(378 - 197 * Math.sin(angle), 100 + 197 * Math.cos(angle))
@@ -138,12 +145,13 @@ Item {
         cursorShape: arm.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         Accessible.role: Accessible.Slider
         Accessible.name: "Needle position"
-        Accessible.description: "Drag onto the grooves to seek and play. Arrow keys seek; Enter starts playback; Escape cancels dragging."
+        Accessible.description: "Drag onto the grooves to seek and play. Hold Shift for precision. Arrow keys seek; Enter starts playback; Escape cancels dragging."
         onPressed: mouse => {
             if (Math.hypot(mouse.x - tip.x, mouse.y - tip.y) > 27) { mouse.accepted = false; return }
+            pointerFocus = true
             forceActiveFocus()
             arm.dragAngle = arm.armAngle; arm.rawAngle = arm.armAngle
-            arm.grabOffset = Math.atan2(378 - mouse.x, mouse.y - 100) * 180 / Math.PI - arm.armAngle
+            arm.lastPointerAngle = Math.atan2(378 - mouse.x, mouse.y - 100) * 180 / Math.PI
             arm.dragTrack = arm.app.cassetteTrackIdentity; arm.wasPlaying = arm.app.deckPlayer.playing
             arm.pointerDistance = Math.hypot(mouse.x - 378, mouse.y - 100)
             arm.dragging = true; arm.landing = false; landingTimeout.stop()
@@ -153,11 +161,15 @@ Item {
             if (!pressed || !arm.dragging) return
             const dx = mouse.x - 378, dy = mouse.y - 100
             arm.pointerDistance = Math.hypot(dx, dy)
-            arm.rawAngle = Math.atan2(-dx, dy) * 180 / Math.PI - arm.grabOffset
+            const pointer = Math.atan2(-dx, dy) * 180 / Math.PI
+            let delta=pointer-arm.lastPointerAngle
+            if(delta>180)delta-=360;else if(delta < -180)delta+=360
+            arm.rawAngle += delta*((mouse.modifiers & Qt.ShiftModifier)?.1:1)
+            arm.lastPointerAngle=pointer
             arm.dragAngle = Math.max(-8, Math.min(38, arm.rawAngle))
         }
-        onReleased: arm.dropNeedle()
-        onCanceled: arm.cancelDrag(true)
+        onReleased: { hintDismissed = true; arm.dropNeedle() }
+        onCanceled: { hintDismissed = true; arm.cancelDrag(true) }
         onWheel: wheel => { wheel.accepted = false }
         Keys.onShortcutOverride: event => { if ([Qt.Key_Escape,Qt.Key_Left,Qt.Key_Right,Qt.Key_Return,Qt.Key_Enter].includes(event.key)) event.accepted = true }
         Keys.onEscapePressed: arm.cancelDrag(true)
@@ -168,7 +180,7 @@ Item {
         Rectangle {
             x: needleHit.tip.x - 22; y: needleHit.tip.y - 25; width: 44; height: 50
             rotation: arm.armAngle; radius: 10; color: "transparent"
-            border.width: needleHit.activeFocus && !needleHit.containsMouse && !arm.dragging ? 1.5 : 0
+            border.width: needleHit.activeFocus && !needleHit.pointerFocus && !arm.dragging ? 1.5 : 0
             border.color: arm.app.accent
         }
     }

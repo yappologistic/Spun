@@ -9,6 +9,14 @@
 #include <QSGGeometryNode>
 #include <QSGVertexColorMaterial>
 
+void ArtworkView::paint(QPainter *painter) {
+    if(m_artwork.isNull())return;
+    const auto size=QSizeF(m_artwork.size()).scaled(boundingRect().size(),Qt::KeepAspectRatio);
+    const QRectF target((width()-size.width())/2,(height()-size.height())/2,size.width(),size.height());
+    painter->setRenderHint(QPainter::SmoothPixmapTransform);
+    painter->drawImage(target,m_artwork);
+}
+
 Disc::Disc(QQuickItem *parent) : QQuickPaintedItem(parent) {
     setAntialiasing(true);
 }
@@ -47,6 +55,13 @@ QImage Disc::fallbackArt(int size) {
         p.setPen(grainPens[noise.bounded(4, 23) - 4]);
         p.drawPoint(QPointF(noise.bounded(1000), noise.bounded(1000)));
     }
+    return image;
+}
+
+// All media use the identical fallback pixels. Share one immutable image even
+// after switching appearances; each painted item retains only an implicit copy.
+static const QImage &sharedFallbackArt() {
+    static const QImage image = Disc::fallbackArt();
     return image;
 }
 
@@ -92,8 +107,7 @@ void Disc::paint(QPainter *p) {
         p->fillPath(label, m_labelColor);
     } else {
     if (m_art.isNull() && m_fallback.isNull()) {
-        static const QImage sharedFallback = fallbackArt();
-        m_fallback = sharedFallback;
+        m_fallback = sharedFallbackArt();
     }
     const QImage &art = m_art.isNull() ? m_fallback : m_art;
     const double crop = qMin(art.width(), art.height());
@@ -143,7 +157,7 @@ void Disc::paintVinyl(QPainter *p) {
     p->save();p->setClipPath(label,Qt::IntersectClip);
     if(m_labelColor.isValid())p->fillPath(label,m_labelColor);
     else {
-        if(m_art.isNull()&&m_fallback.isNull()) { static const QImage shared=fallbackArt();m_fallback=shared; }
+        if(m_art.isNull()&&m_fallback.isNull()) { m_fallback=sharedFallbackArt(); }
         const auto &art=m_art.isNull()?m_fallback:m_art;const double crop=qMin(art.width(),art.height());
         p->drawImage(QRectF(500-radius,500-radius,radius*2,radius*2),art,QRectF((art.width()-crop)/2,(art.height()-crop)/2,crop,crop));
     }
@@ -197,7 +211,7 @@ void Disc::paintCassette(QPainter *p) {
     p->save();p->setClipPath(clip);
     if(m_labelColor.isValid())p->fillPath(clip,m_labelColor);
     else {
-        if(m_art.isNull() && m_fallback.isNull()) {static const QImage shared=fallbackArt();m_fallback=shared;}
+        if(m_art.isNull() && m_fallback.isNull()) {m_fallback=sharedFallbackArt();}
         const auto &art=m_art.isNull()?m_fallback:m_art;
         const double scale=qMax(label.width()/art.width(),label.height()/art.height());
         const QSizeF crop(label.width()/scale,label.height()/scale);
@@ -277,6 +291,10 @@ void Disc::paintCassette(QPainter *p) {
 class RingNode final : public QSGGeometryNode {
 public:
     int capacity = 0, indexCapacity = 0, indexedSteps = -1, indexedDotSteps = -1;
+    struct Sample { qreal t, sine, cosine, waveSine, waveCosine, envelope; };
+    QList<Sample> samples;
+    qreal sampledArc = -1, sampledRadius = -1;
+    bool sampledLinear = false;
 };
 
 // Small vertex buffers animate the rim without repainting or uploading a full CD-sized texture.
@@ -335,32 +353,27 @@ QSGNode *ProgressRing::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) 
         (vertices++)->set(point.x(), point.y(), visible ? red : 0, visible ? green : 0,
                          visible ? blue : 0, visible ? opaque : 0);
     };
-    auto point = [&](qreal t, qreal offset) {
-        const qreal envelope = qBound(0., qMin(t,arc-t)*radius/14, 1.);
-        const qreal r = radius + std::sin(t*28-m_phase)*m_amplitude*envelope + offset;
-        return center + QPointF(std::sin(t)*r, -std::cos(t)*r);
-    };
+    // Progress changes less often than the animated phase. Reuse the expensive
+    // trigonometry between progress updates, retaining the same tessellation.
+    if (node->samples.size() != steps+1 || node->sampledArc != arc || node->sampledRadius != radius || node->sampledLinear != m_linear) {
+        node->samples.resize(steps+1);
+        for (int i=0; i<=steps; ++i) {
+            const qreal t=arc*i/steps, wave=t*(m_linear?2*M_PI/24:28);
+            node->samples[i]={t,std::sin(t),-std::cos(t),std::sin(wave),std::cos(wave),qBound(0.,qMin(t,arc-t)*radius/14,1.)};
+        }
+        node->sampledArc=arc;node->sampledRadius=radius;node->sampledLinear=m_linear;
+    }
+    const qreal phaseSine=std::sin(m_phase),phaseCosine=std::cos(m_phase);
     constexpr qreal offsets[] = {-1.9, -.9, .9, 1.9};
     constexpr bool opacity[] = {false, true, true, false};
-    auto edge = [&](qreal t) {
-        const qreal envelope = qBound(0., qMin(t,arc-t)*radius/14, 1.);
-        if (m_linear) {
-            const qreal y = height()/2 + std::sin(t*2*M_PI/24-m_phase)*m_amplitude*envelope;
-            std::array<QPointF,4> points;
-            for (int j=0; j<4; ++j) points[j]=QPointF(t,y+offsets[j]);
-            return points;
+    for (const auto &sample : std::as_const(node->samples)) {
+        const qreal wave=(sample.waveSine*phaseCosine-sample.waveCosine*phaseSine)*m_amplitude*sample.envelope;
+        for (int band=0; band<4; ++band) {
+            const qreal r=radius+wave+offsets[band];
+            vertex(m_linear?QPointF(sample.t,height()/2+wave+offsets[band]):center+QPointF(sample.sine*r,sample.cosine*r),opacity[band]);
         }
-        const qreal r = radius + std::sin(t*28-m_phase)*m_amplitude*envelope;
-        const qreal sine = std::sin(t), cosine = -std::cos(t);
-        std::array<QPointF,4> points;
-        for (int j=0; j<4; ++j) points[j] = center + QPointF(sine*(r+offsets[j]), cosine*(r+offsets[j]));
-        return points;
-    };
-    for (int i=0; i<=steps; ++i) {
-        const auto points = edge(arc*i/steps);
-        for (int band=0; band<4; ++band) vertex(points[band],opacity[band]);
     }
-    const QPointF head=point(arc,0);
+    const QPointF head=center+QPointF(std::sin(arc)*radius,-std::cos(arc)*radius);
     for (int i=0; i<dotSteps; ++i) {
         const qreal a=2*M_PI*i/dotSteps, b=2*M_PI*(i+1)/dotSteps;
         const QPointF av(std::cos(a),std::sin(a)), bv(std::cos(b),std::sin(b));

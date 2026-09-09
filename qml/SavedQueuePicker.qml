@@ -13,9 +13,10 @@ Popup {
     objectName: "savedQueuePicker"
     popupType: Popup.Item; focus: true; modal: true; dim: true; padding: 24
     parent: Overlay.overlay
-    anchors.centerIn: parent
-    width: Math.min(360, app.width - 32)
-    height: Math.min(438, Math.max(310, 252 + rows.length * 62), app.height - 48)
+    x: ((app.layoutWidth || app.width) - width) / 2
+    y: ((app.layoutHeight || app.height) - height) / 2
+    width: Math.min(360, (app.layoutWidth || app.width) - 32)
+    height: Math.min(438, Math.max(310, 252 + rows.length * 62), (app.layoutHeight || app.height) - 48)
     background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
     Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
     enter: SpunPopupEnter {}

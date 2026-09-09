@@ -29,6 +29,7 @@ Rectangle {
     }
     readonly property bool artistSongs: artistPage && browser.artistView === "songs"
     property var savedPositions: []
+    property int navigationDirection: 0
     property var selectionKeys: []
     property int selectionAnchor: -1
     readonly property int selectionCount: selectionKeys.length
@@ -111,9 +112,10 @@ Rectangle {
         NumberAnimation { target: entranceOffset; property: "x"; from: 12; to: 0; duration: panel.transitionTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.enterCurve }
     }
     ParallelAnimation {
-        id: listEntrance
+        id: listEntrance; objectName: "libraryListEntrance"
+        property real startOffset: 0
         NumberAnimation { target: list; property: "opacity"; from: 0; to: 1; duration: panel.feedbackTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve }
-        NumberAnimation { target: listOffset; property: "x"; from: panel.detail ? 12 : 0; to: 0; duration: panel.transitionTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.enterCurve }
+        NumberAnimation { target: listOffset; property: "x"; from: listEntrance.startOffset; to: 0; duration: panel.transitionTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.enterCurve }
     }
     color: app.surface; radius: SpunStyle.panelRadius
     width: 310
@@ -122,16 +124,17 @@ Rectangle {
     function activate(index) {
         if (index < 0) return
         if (!detail) savedY = list.contentY
+        list.currentIndex = index
         browser.open(index)
         if (detail) list.forceActiveFocus()
     }
     Connections {
         target: panel.browser
-        function onNavigating() { panel.savedPositions = panel.savedPositions.slice(-15).concat([list.contentY]) }
-        function onNavigationReset() { panel.savedPositions = []; panel.clearSelection() }
+        function onNavigating() { panel.navigationDirection = 1; panel.savedPositions = panel.savedPositions.slice(-15).concat([{ y: list.contentY, index: list.currentIndex }]) }
+        function onNavigationReset() { panel.savedPositions = []; panel.navigationDirection = 0; panel.clearSelection() }
         function onItemsChanging(append) { if (!append) panel.clearSelection(); panel.closeActions(); panel.appending = append; panel.pageY = append ? list.contentY : 0; panel.pageIndex = append ? list.currentIndex : -1 }
-        function onItemsChanged() { const keys = new Set(panel.browser.items.map((item, index) => panel.rowKey(index, item))); panel.selectionKeys = panel.selectionKeys.filter(key => keys.has(key)); Qt.callLater(function() { list.contentY = panel.pageY; list.currentIndex = panel.pageIndex; if (!panel.appending && panel.app.animate && panel.visible && list.count) listEntrance.restart() }) }
-        function onReturned() { const positions = panel.savedPositions.slice(); const y = positions.pop() || 0; panel.savedPositions = positions; Qt.callLater(function() { list.contentY = y; list.forceActiveFocus() }) }
+        function onItemsChanged() { const keys = new Set(panel.browser.items.map((item, index) => panel.rowKey(index, item))); panel.selectionKeys = panel.selectionKeys.filter(key => keys.has(key)); Qt.callLater(function() { list.contentY = panel.pageY; list.currentIndex = panel.pageIndex; if (!panel.appending && panel.visible && list.count) { if (panel.app.animate) { listEntrance.startOffset = panel.navigationDirection * 12; listEntrance.restart() }; panel.navigationDirection = 0 } }) }
+        function onReturned() { const positions = panel.savedPositions.slice(); const previous = positions.pop() || { y: 0, index: -1 }; panel.savedPositions = positions; panel.navigationDirection = -1; Qt.callLater(function() { list.currentIndex = Math.min(list.count - 1, previous.index); list.contentY = previous.y; list.forceActiveFocus(Qt.BacktabFocusReason) }) }
     }
     component SmallButton: AbstractButton {
         id: control

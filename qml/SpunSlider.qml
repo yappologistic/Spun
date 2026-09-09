@@ -8,6 +8,7 @@ Slider {
     padding: 4
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    property bool previewing: false
     property string valueText: Math.round(value * 100) + "%"
     background: Item {
         x: control.leftPadding; y: control.topPadding
@@ -34,7 +35,7 @@ Slider {
     handle: Rectangle {
         x: control.leftPadding + control.visualPosition * (control.availableWidth - 4)
         y: control.topPadding + (control.availableHeight - height) / 2
-        width: 4; height: control.pressed ? 20 : 16; radius: 2
+        width: 4; height: (control.pressed || control.previewing) ? 20 : 16; radius: 2
         color: theme.colors.accent; opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
         Behavior on height { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         Rectangle {
@@ -42,5 +43,5 @@ Slider {
             color: "transparent"; border.width: control.visualFocus ? 2 : 0; border.color: theme.colors.accent
         }
     }
-    SpunToolTip { visible: control.enabled && (control.pressed || control.visualFocus); delay: 0; text: control.valueText }
+    SpunToolTip { visible: control.enabled && (control.pressed || control.previewing || control.visualFocus); delay: 0; text: control.valueText }
 }

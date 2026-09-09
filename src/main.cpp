@@ -114,14 +114,27 @@ public:
         const bool cassette=window->property("cassette").toBool();
         const int targetWidth = mini ? 300 : queue ? 860 : 530;
         const int targetHeight = mini ? (window->property("showHorizontalSeek").toBool()?382:354) : 730;
+        const qreal scale=qBound(.5,window->property("uiScale").toDouble(),1.5);
+        QTransform zoom;zoom.scale(scale,scale);
+        const auto setMask=[&](const QRegion &region){window->setMask(zoom.map(region));};
+        const auto itemRegion=[&](QQuickItem *item){
+            const auto rect=item->mapRectToScene(item->boundingRect());
+            return QRegion(QRectF(rect.x()/scale,rect.y()/scale,rect.width()/scale,rect.height()/scale).toAlignedRect());
+        };
         window->setMinimumWidth(0);
         window->setMinimumHeight(0);
-        window->setMaximumWidth(targetWidth);
-        window->setMaximumHeight(targetHeight);
-        window->resize(targetWidth, targetHeight);
-        window->setMinimumWidth(targetWidth);
-        window->setMinimumHeight(targetHeight);
-        if (mini && window->property("menuOpen").toBool()) { window->setMask(QRegion(0,0,targetWidth,targetHeight));return; }
+        window->setMaximumWidth(qRound(targetWidth*scale));
+        window->setMaximumHeight(qRound(targetHeight*scale));
+        window->resize(qRound(targetWidth*scale), qRound(targetHeight*scale));
+        window->setMinimumWidth(qRound(targetWidth*scale));
+        window->setMinimumHeight(qRound(targetHeight*scale));
+        // Scale the ApplicationWindow scene, never QQuickWindow's input-coordinate root.
+        if(auto *content=window->property("contentItem").value<QQuickItem *>()) {
+            content->setTransformOrigin(QQuickItem::TopLeft);
+            content->setScale(scale);
+            content->setSize(QSizeF(targetWidth,targetHeight));
+        }
+        if (mini && window->property("menuOpen").toBool()) { setMask(QRegion(0,0,targetWidth,targetHeight));return; }
         if (mini) {
             QRegion region=cassette?QRegion(18,60,264,176):QRegion(6,6,288,288,QRegion::Ellipse);
             if(cassette)region|=QRegion(50,240,200,26);
@@ -132,34 +145,34 @@ public:
             else if(!cassette)region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
             region |= QRegion(50,268,200,targetHeight-270);
             if (auto *notice=window->findChild<QQuickItem *>("actionNotice"); notice && notice->isVisible())
-                region |= QRegion(notice->mapRectToScene(notice->boundingRect()).toAlignedRect());
-            window->setMask(region); return;
+                region |= itemRegion(notice);
+            setMask(region); return;
         }
         if (window->property("helpOpen").toBool() || window->property("menuOpen").toBool()) {
-            window->setMask(QRegion(0, 0, window->width(), window->height())); return;
+            setMask(QRegion(0, 0, targetWidth, targetHeight)); return;
         }
         if (window->property("backgroundBlur").toBool()) {
-            QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0, 0, window->width(), window->height()), 21, 21);
-            window->setMask(QRegion(backdrop.toFillPolygon().toPolygon())); return;
+            QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0, 0, targetWidth, targetHeight), 21, 21);
+            setMask(QRegion(backdrop.toFillPolygon().toPolygon())); return;
         }
         QRegion region=cassette?QRegion(60,156,410,276):QRegion(44,73,442,442,QRegion::Ellipse);
         if(cassette)region|=QRegion(115,439,300,36);
         if(!cassette)region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
-            region |= QRegion(bar->mapRectToScene(bar->boundingRect()).toAlignedRect());
+            region |= itemRegion(bar);
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
-            region |= QRegion(deck->mapRectToScene(deck->boundingRect()).toAlignedRect());
+            region |= itemRegion(deck);
         region |= QRegion(65, 701, 400, 26);
         if (auto *notice=window->findChild<QQuickItem *>("actionNotice"); notice && notice->isVisible())
-            region |= QRegion(notice->mapRectToScene(notice->boundingRect()).toAlignedRect());
+            region |= itemRegion(notice);
         // Error notices can overlap the otherwise click-through perimeter.
         region |= QRegion(73, 419, 384, 80);
         if (queue) {
             const auto *panelName = window->property("libraryOpen").toBool() ? "libraryPanel" : "queuePanel";
             if (auto *panel = window->findChild<QQuickItem *>(panelName))
-                region |= QRegion(panel->mapRectToScene(panel->boundingRect()).toAlignedRect());
+                region |= itemRegion(panel);
         }
-        window->setMask(region);
+        setMask(region);
     }
     Q_INVOKABLE void place(QWindow *window) {
         if (!window) return;
@@ -451,11 +464,72 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     check(bar && qAbs(bar->x()+bar->width()/2-265) < .1, "source bar centered over CD");
     auto *songTitle = window->findChild<QQuickItem *>("songTitle");
     check(songTitle && songTitle->property("font").value<QFont>().weight() == QFont::Normal, "song title uses regular weight");
+    auto *elapsedTime=findItem(window->contentItem(),"elapsedTime");
+    check(songTitle&&elapsedTime&&qAbs(songTitle->y()+songTitle->baselineOffset()-elapsedTime->y()-elapsedTime->baselineOffset())<.1,"elapsed time shares the song title baseline");
+
     check(window->property("font").value<QFont>().family() == QFontInfo(QFontDatabase::systemFont(QFontDatabase::GeneralFont)).family(), "new profiles follow the system font");
     auto *type = qobject_cast<Typography *>(QQmlEngine::contextForObject(window)->contextProperty("typography").value<QObject *>());
     check(type && type->families().isEmpty(), "installed fonts are listed only when requested");
     check(!window->findChild<QObject *>("fontPicker"), "font picker objects are absent from startup");
+    check(!window->findChild<QObject *>("crossfadeToggle") && !window->findChild<QObject *>("recoveryCancel"),
+          "closed audio and recovery popups do not create their controls at startup");
+    {
+        QList<QUrl> browsingTracks;
+        for(int i=0;i<12;++i) {
+            const auto path=temp+QString("/queue-browse-%1.flac").arg(i);
+            QFile::copy(QStringLiteral(SPUN_SOURCE_DIR "/assets/First-Light.flac"),path);browsingTracks.append(QUrl::fromLocalFile(path));
+        }
+        player.addUrls(browsingTracks,false);waitFor([&]{return !player.busy()&&player.count()==12;});
+        player.select(0,false);player.pause();window->setProperty("queueOpen",true);QTest::qWait(200);
+        auto *queueView=findItem(window->contentItem(),"trackList");
+        const auto at=queueView->mapToScene(QPointF(queueView->width()/2,queueView->height()/2));
+        QWheelEvent browseWheel(at,window->mapToGlobal(at.toPoint()),QPoint(),QPoint(0,-480),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);
+        QGuiApplication::sendEvent(window,&browseWheel);QTest::qWait(500);
+        const auto readingPosition=queueView->property("contentY").toReal();
+        if(readingPosition<=50)std::cerr<<"Queue scroll diagnostic: y="<<readingPosition<<" content="<<queueView->property("contentHeight").toReal()<<" viewport="<<queueView->height()<<" count="<<queueView->property("count").toInt()<<" following="<<queueView->property("following").toBool()<<std::endl;
+        check(readingPosition>50&&!queueView->property("following").toBool(),"mouse-wheel browsing scrolls a long queue and pauses automatic following");
+        const auto rememberedPosition=queueView->property("readingY").toReal();
+        player.select(1,false);QTest::qWait(200);
+        if(qAbs(queueView->property("contentY").toReal()-readingPosition)>=2)std::cerr<<"Queue restore diagnostic: before="<<readingPosition<<" remembered="<<rememberedPosition<<" after="<<queueView->property("contentY").toReal()<<" origin="<<queueView->property("originY").toReal()<<std::endl;
+        check(qAbs(queueView->property("contentY").toReal()-readingPosition)<2,"changing the current song preserves the actual queue scroll position");
+        capture("25-queue-browsing");click("currentQueueButton");QTest::qWait(200);
+        check(queueView->property("following").toBool()&&queueView->property("contentY").toReal()<readingPosition,"Current song scrolls back to the playing row");
+        player.clear();window->setProperty("queueOpen",false);QTest::qWait(100);
+    }
     if (type) {
+        type->setUiScale(1.25);QTest::qWait(150);
+        check(window->width()==qRound(window->property("layoutWidth").toReal()*1.25)
+              &&qFuzzyCompare(window->property("contentItem").value<QQuickItem*>()->scale(),1.25)
+              &&qFuzzyCompare(window->contentItem()->scale(),1.),"interface scaling leaves the window input coordinate root unscaled");
+        window->setProperty("helpOpen",true);QTest::qWait(250);
+        auto *scaledClose=findItem(window->contentItem(),"shortcutsClose");
+        check(scaledClose&&window->mask().contains(scaledClose->mapToScene(QPointF(20,20)).toPoint()),"scaled popup controls remain inside the native input mask");
+        auto *scaledPopup=window->findChild<QObject *>("shortcutsPopup");
+        auto *scaledContent=scaledPopup?scaledPopup->property("contentItem").value<QQuickItem*>():nullptr;
+        const auto popupCenter=scaledContent?scaledContent->mapToScene(QPointF(scaledContent->width()/2,scaledContent->height()/2)):QPointF();
+        check(scaledContent&&qAbs(popupCenter.x()-window->width()/2.)<1&&qAbs(popupCenter.y()-window->height()/2.)<1,"scaled dialog remains visually centered in the window");
+        capture("25-scaled-shortcuts");
+        testKeyClick(window,Qt::Key_Escape);QTest::qWait(150);
+        {Typography saved(temp+"/player.ini");check(qFuzzyCompare(saved.uiScale(),1.25),"interface scale survives relaunch");}
+        type->setUiScale(1.);QTest::qWait(150);
+        check(window->width()==530&&window->height()==730&&qFuzzyCompare(window->contentItem()->scale(),1.),"interface scale restores the original layout exactly");
+        for(const qreal scale: { .85, 1.5 }) {
+            type->setUiScale(scale);window->setProperty("queueOpen",true);QTest::qWait(150);
+            auto *panel=findItem(window->contentItem(),"queuePanel");
+            check(window->width()==qRound(860*scale)&&panel&&window->mask().contains(panel->mapToScene(QPointF(100,100)).toPoint()),"scaled sidebar retains its native input region");
+            auto *localSource=findItem(window->contentItem(),"localSourceButton");
+            QTest::mouseMove(window,QPoint(1,1));QTest::qWait(30);
+            QTest::mouseMove(window,localSource->mapToScene(QPointF(localSource->width()/2,localSource->height()/2)).toPoint());QTest::qWait(100);
+            check(localSource->property("hovered").toBool(),"scaled controls hover at their visible position");
+            click("ciderSourceButton");check(window->property("useCider").toBool(),"scaled source selection hits the visible Cider button");
+            click("localSourceButton");check(!window->property("useCider").toBool(),"scaled source selection hits the visible Local button");
+            window->setProperty("queueOpen",false);player.setMiniMode(true);QTest::qWait(150);
+            check(window->width()==qRound(300*scale)&&window->height()==qRound(354*scale),"Mini mode respects the chosen interface size");
+            player.setMiniMode(false);window->setProperty("helpOpen",true);QTest::qWait(250);
+            capture(QString("25-scale-%1").arg(qRound(scale*100)));
+            click("shortcutsClose");check(!window->property("helpOpen").toBool(),"scaled popup closes through its actual pointer target");
+        }
+        type->setUiScale(1.);QTest::qWait(150);
         type->loadFamilies();
         QString chosen;
         for (const auto &family : type->families()) if (family != type->systemFamily()) { chosen = family; break; }
@@ -465,13 +539,18 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         window->setProperty("queueOpen",true);QTest::qWait(200);
         click("menuButton");QTest::qWait(200);
         auto *settingsPopup=window->findChild<QObject *>("settingsMenu");
+        auto *preferencesAction=window->findChild<QObject *>("preferencesAction");
+        auto *menuContent=preferencesAction ? preferencesAction->property("contentItem").value<QObject *>() : nullptr;
+        check(menuContent && menuContent->property("item").value<QObject *>(), "opening a menu creates its visible label and icon content");
         const auto menuVolume=player.volume();
         testKeyClick(window,Qt::Key_Down);testKeyClick(window,Qt::Key_Down);
         check(settingsPopup&&settingsPopup->property("currentIndex").toInt()>=0&&player.volume()==menuVolume,"menu arrow navigation moves focus without changing playback volume");
         testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
         check(!settingsPopup->property("visible").toBool()&&window->property("queueOpen").toBool(),"Escape dismisses the settings menu without closing the queue behind it");
+        check(menuContent && !menuContent->property("item").value<QObject *>(), "closed menu releases its visual content after the exit transition");
         window->setProperty("queueOpen",false);QTest::qWait(200);
         click("menuButton"); QTest::qWait(250);
+        check(menuContent && menuContent->property("item").value<QObject *>(), "reopening a menu restores its visual content");
         auto *fontLoader=window->findChild<QObject *>("fontPickerLoader");
         auto *fontPreferences=window->findChild<QObject *>("preferencesPopup");
         QSignalMapper fontLoaded;
@@ -615,6 +694,38 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
               "rapid hover reversals settle without changing the hover hue");
     } else check(false, "hover state layer exists");
     capture("01-empty");
+    window->contentItem()->forceActiveFocus(); testKeyClick(window,Qt::Key_F1); QTest::qWait(250);
+    auto *shortcuts=window->findChild<QObject *>("shortcutsPopup");
+    auto *shortcutsClose=findItem(window->contentItem(),"shortcutsClose");
+    check(shortcuts&&shortcuts->property("opened").toBool()&&shortcutsClose&&shortcutsClose->hasActiveFocus(),
+          "F1 opens a focused shortcuts dialog");
+    const auto helpVolume=player.volume();const auto helpPosition=player.position();
+    testKeyClick(window,Qt::Key_Right);testKeyClick(window,Qt::Key_Up);
+    check(player.volume()==helpVolume&&player.position()==helpPosition,"shortcuts dialog blocks background playback shortcuts");
+    QList<QQuickItem *> helpKeys,helpActions;
+    std::function<void(QQuickItem *)> collectHelp=[&](QQuickItem *item) {
+        if(item->objectName()=="shortcutKey")helpKeys.append(item);
+        if(item->objectName()=="shortcutAction")helpActions.append(item);
+        for(auto *child:item->childItems())collectHelp(child);
+    };
+    collectHelp(window->contentItem());
+    bool aligned=helpKeys.size()==20&&helpActions.size()==20;
+    for(int i=0;i<helpKeys.size()&&i<helpActions.size();++i)
+        aligned &= helpKeys[i]->x()==helpKeys[0]->x()&&helpActions[i]->x()==helpActions[0]->x()
+            &&helpKeys[i]->width()+12<=helpActions[i]->x()+.01;
+    check(aligned,"shortcut keys and descriptions use aligned columns with a consistent gap");
+    capture("23-shortcuts");
+    testKeyClick(window,Qt::Key_Tab);
+    auto *helpScroll=findItem(window->contentItem(),"shortcutScroll");
+    check(helpScroll&&helpScroll->hasActiveFocus(),"Tab reaches the scrollable shortcut list");
+    testKeyClick(window,Qt::Key_PageDown);
+    check(player.position()==helpPosition,"scrolling shortcuts does not seek playback");
+    testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
+    check(!window->property("helpOpen").toBool()&&!window->findChild<QObject *>("shortcutsClose")
+          &&findItem(window->contentItem(),"menuButton")->hasActiveFocus(),"Escape closes shortcuts, releases controls and restores focus");
+    testKeyClick(window,Qt::Key_F1);QTest::qWait(250);
+    check(shortcuts->property("opened").toBool(),"shortcuts can reopen after dismissal");
+    testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
     const auto demo = QStringLiteral(SPUN_SOURCE_DIR "/assets/First-Light.flac");
     const auto other = temp + "/Second-Light.flac";
     QFile::copy(demo, other);
@@ -680,6 +791,14 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     check(waitFor([&] { return qAbs(player.position()-7000) < 300; }), "seek changes actual media position");
     QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, QPoint(481, 294));
     check(waitFor([&] { return qAbs(player.position()-player.duration()/4) < 350; }), "outer CD rim scrubs playback");
+    {
+        auto *scrub=findItem(window->contentItem(),"scrubber");
+        QTest::mousePress(window,Qt::LeftButton,Qt::ShiftModifier,QPoint(481,294));
+        QMouseEvent fineMove(QEvent::MouseMove,QPointF(265,510),window->mapToGlobal(QPoint(265,510)),Qt::NoButton,Qt::LeftButton,Qt::ShiftModifier);QGuiApplication::sendEvent(window,&fineMove);
+        check(scrub&&scrub->property("previewFraction").toReal()>.27&&scrub->property("previewFraction").toReal()<.28,"Shift drag makes precise adjustments on the circular progress ring");
+        testKeyClick(window,Qt::Key_Escape);QTest::mouseRelease(window,Qt::LeftButton,Qt::ShiftModifier,QPoint(265,510));
+        check(qAbs(player.position()-player.duration()/4)<350,"Escape cancels a circular seek preview");
+    }
     click("shuffleButton"); check(player.shuffle(), "shuffle control toggles");
     click("repeatButton"); check(player.repeatMode() == 1, "repeat control cycles");
     player.setShuffle(false); player.setRepeatMode(0);
@@ -738,6 +857,13 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         window->setProperty("discFlipped",false);QTest::qWait(400);
     }
     {
+        QMetaObject::invokeMethod(window,"showArtwork");QTest::qWait(250);
+        auto *artView=findItem(window->contentItem(),"fullArtwork");
+        check(artView&&qobject_cast<ArtworkView *>(artView)&&!artView->property("artwork").value<QImage>().isNull(),"artwork inspection displays the decoded original cover");
+        check(findItem(window->contentItem(),"artworkClose")->hasActiveFocus(),"artwork inspection starts with keyboard focus on Close");
+        capture("25-artwork-inspection");
+        testKeyClick(window,Qt::Key_Escape);QTest::qWait(200);
+        check(!findItem(window->contentItem(),"fullArtwork"),"closing artwork inspection releases its image view");
         const int originalTrack=player.currentIndex();const auto originalPosition=player.position();
         const auto speedPosition=player.position();
         player.setVinylSpeed(33);player.play();window->setProperty("spinSpeed",200.);window->setProperty("spinAngle",0.);QTest::qWait(250);
@@ -754,6 +880,17 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         if(seek){
             QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,seek->mapToScene(QPointF(seek->width()*.7,seek->height()/2)).toPoint());
             check(waitFor([&]{return qAbs(player.position()-player.duration()*.7)<800;}),"horizontal progress bar seeks to the selected point");
+            player.seek(player.duration()*.4);QTest::qWait(150);
+            const auto start=seek->mapToScene(QPointF(seek->width()*.4,seek->height()/2)).toPoint();
+            const auto finish=seek->mapToScene(QPointF(seek->width()*.8,seek->height()/2)).toPoint();
+            QTest::mousePress(window,Qt::LeftButton,Qt::ShiftModifier,start);
+            QTest::keyPress(window,Qt::Key_Shift);
+            QMouseEvent fineMove(QEvent::MouseMove,finish,window->mapToGlobal(finish),Qt::NoButton,Qt::LeftButton,Qt::ShiftModifier);QGuiApplication::sendEvent(window,&fineMove);QTest::qWait(120);
+            check(qAbs(player.position()-player.duration()*.4)<600,"drag seeking previews without repeatedly seeking playback");
+            const auto fine=seek->property("value").toReal();
+            check(fine>.42&&fine<.47,"Shift drag provides fine seeking without an initial jump");
+            QTest::mouseRelease(window,Qt::LeftButton,Qt::ShiftModifier,finish);QTest::keyRelease(window,Qt::Key_Shift);
+            check(waitFor([&]{return qAbs(player.position()-player.duration()*fine)<700;}),"releasing a fine seek commits the previewed position");
             const auto before=player.position();QTest::keyClick(window,Qt::Key_Left);
             check(waitFor([&]{return player.position()<before;}),"horizontal progress bar supports keyboard seeking");
         }
@@ -798,6 +935,19 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
             dragTo(16);
             check(waitFor([&]{return player.playing()&&qAbs(player.position()-player.duration()*.5)<1200;}),"dropping the needle at the middle grooves seeks and starts playback");
             check(!tonearm->property("dragging").toBool(),"needle releases its pointer after a valid drop");
+            QTest::mouseMove(window,QPoint(15,15));QTest::qWait(300);
+            auto *needleTip=window->findChild<QObject*>("needleToolTip");
+            check(needleTip&&!needleTip->property("visible").toBool(),"needle tooltip closes after dragging when the pointer leaves despite retained focus");
+            QTest::qWait(600);
+            const auto preciseStart=shaft->mapToScene(QPointF(0,197)).toPoint();
+            QTest::mousePress(window,Qt::LeftButton,Qt::ShiftModifier,preciseStart);QTest::qWait(30);
+            const auto initialAngle=tonearm->property("rawAngle").toReal();
+            const double preciseAngle=(initialAngle+10)*M_PI/180;
+            const auto preciseEnd=tonearm->mapToScene(QPointF(378-197*std::sin(preciseAngle),100+197*std::cos(preciseAngle))).toPoint();
+            QMouseEvent preciseMove(QEvent::MouseMove,preciseEnd,window->mapToGlobal(preciseEnd),Qt::NoButton,Qt::LeftButton,Qt::ShiftModifier);QGuiApplication::sendEvent(window,&preciseMove);
+            const auto adjusted=tonearm->property("rawAngle").toReal()-initialAngle;
+            check(adjusted>.8&&adjusted<1.2,"Shift drag reduces tonearm movement to one tenth for precise seeking");
+            testKeyClick(window,Qt::Key_Escape);QTest::mouseRelease(window,Qt::LeftButton,Qt::ShiftModifier,preciseEnd);
             QTest::qWait(600);capture("22-needle-dropped");
             const auto before=player.position();const auto from=shaft->mapToScene(QPointF(0,197)).toPoint();
             QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,from);QTest::qWait(60);QTest::keyClick(window,Qt::Key_Escape);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,from);
@@ -868,6 +1018,22 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         check(reel->rotation()==stopped,"cassette transport stops its reels when paused");
         check(wave&&qFuzzyIsNull(wave->property("amplitude").toDouble()),"cassette progress wave settles when paused");
     }
+    if(cassetteSeek&&reel) {
+        player.pause();player.seek(player.duration()*.25);QTest::qWait(100);
+        const auto start=player.position();const auto angle=reel->rotation();
+        const auto left=cassetteSeek->mapToScene(QPointF(cassetteSeek->width()*.25,cassetteSeek->height()/2)).toPoint();
+        const auto right=cassetteSeek->mapToScene(QPointF(cassetteSeek->width()*.7,cassetteSeek->height()/2)).toPoint();
+        QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,left);QTest::mouseMove(window,right,50);QTest::qWait(80);
+        check(cassetteSeek->property("scrubbing").toBool()&&qAbs(player.position()-start)<100,"cassette seeking previews without repeatedly seeking the audio");
+        check(reel->rotation()!=angle,"paused cassette reels wind while the seek preview moves");
+        capture("25-cassette-winding");
+        testKeyClick(window,Qt::Key_Escape);QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,right);QTest::qWait(100);
+        check(!cassetteSeek->property("scrubbing").toBool()&&qAbs(player.position()-start)<100,"Escape cancels cassette seeking without changing playback");
+        player.setMotion(false);QTest::qWait(80);const auto still=reel->rotation();
+        QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,left);QTest::mouseMove(window,right,50);QTest::qWait(100);
+        check(reel->rotation()==still,"cassette seek winding respects reduced motion");
+        QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,right);player.setMotion(true);QTest::qWait(150);
+    }
     QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(340,457));
     check(waitFor([&]{return qAbs(player.position()-player.duration()*.75)<1000;}),"cassette seek bar scrubs the same player");
     const auto beforeCassetteKey=player.position();QTest::keyClick(window,Qt::Key_Right);
@@ -903,7 +1069,19 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     check(waitFor([&]{return !lyrics.loading() && lyrics.lines().size()==6;}), "lyrics toggle loads a matching local LRC file");
     player.seek(5500);check(waitFor([&]{return lyrics.currentIndex()==1;}), "timed lyrics follow seeking");
     capture("02-lyrics");
+    auto *lyricTip=window->findChild<QObject *>("lyricSeekToolTip");
+    auto hoverLyric=[&](int index) {
+        auto *hit=findItem(window->contentItem(),QString("lyricHit%1").arg(index));
+        if(!hit)return;
+        QTest::mouseMove(window,QPoint(15,15));QTest::qWait(80);
+        QTest::mouseMove(window,hit->mapToScene(QPointF(hit->width()/2,hit->height()/2)).toPoint());
+        QTest::qWait(850);
+    };
+    hoverLyric(2);
+    check(lyricTip&&lyricTip->property("opened").toBool(),"hovering a visible timed lyric opens the shared seek tooltip");
     click("lyricHit2");
+    QTest::qWait(750);
+    check(lyricTip&&!lyricTip->property("visible").toBool(),"clicking a lyric dismisses its tooltip even while the pointer stays over lyrics");
     check(waitFor([&]{return qAbs(player.position()-10000)<200;}), "clicking a timed lyric seeks to its timestamp");
     check(!player.playing() && window->property("discFlipped").toBool(), "lyric seeking preserves pause and the reverse view");
     auto *clickedLine=findItem(window->contentItem(),"lyricHit2");
@@ -922,6 +1100,14 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     testKeyClick(window,Qt::Key_Down);QTest::qWait(100);
     check(!lyricList->property("following").toBool() && player.volume()==lyricsVolume, "manual lyric browsing pauses following without adjusting volume");
     click("followLyricsButton");check(lyricList->property("following").toBool(), "follow control returns to the current lyric");
+    hoverLyric(1);check(lyricTip&&lyricTip->property("opened").toBool(),"lyric tooltip can open again after leaving and returning");
+    lyricList->setProperty("contentY",lyricList->property("contentY").toReal()+10);QTest::qWait(250);
+    check(!lyricTip->property("visible").toBool(),"scrolling lyrics dismisses the overlay tooltip");
+    player.seek(5500);QMetaObject::invokeMethod(lyricList,"followLine");QTest::qWait(100);hoverLyric(1);
+    window->setProperty("discFlipped",false);QTest::qWait(450);
+    check(!lyricTip->property("visible").toBool(),"flipping away from lyrics dismisses the seek tooltip");
+    window->setProperty("discFlipped",true);QTest::qWait(450);
+
     player.setMiniMode(true);QTest::qWait(400);capture("02-mini-lyrics");capture("11-vinyl-mini-lyrics");
     check(window->width()==300 && lyrics.active(), "lyrics remain readable and active in Mini mode");
     click("lyricHit1");check(waitFor([&]{return qAbs(player.position()-5000)<200;}), "timed lyric clicks work at Mini mode scale");
@@ -951,6 +1137,18 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     testKeyClick(window, Qt::Key_Return);
     check(waitFor([&]{return player.currentIndex()==1;}), "Enter on filtered queue selects the original track index");
     player.pause();
+    click("clearQueueSearch");
+    check(window->property("queueSearchOpen").toBool()&&window->property("queueQuery").toString().isEmpty()
+          &&search->hasActiveFocus()&&list->property("count").toInt()==2,"Clear restores all queue rows and keeps search ready for typing");
+    search->setProperty("text","second");QTest::qWait(80);player.select(0,false);player.pause();
+    testKeyClick(window,Qt::Key_Down);
+    check(list->hasActiveFocus()&&list->property("keyboardIndex").toInt()==0&&!player.playing(),"Down moves from queue search to its first result without starting playback");
+    capture("24-queue-search-focus");
+    testKeyClick(window,Qt::Key_Return);
+    check(waitFor([&]{return player.currentIndex()==1&&player.playing();}),"Enter activates the keyboard-focused filtered queue result");
+    player.pause();
+    QMetaObject::invokeMethod(window,"closeQueueSearch");QTest::qWait(100);
+    check(findItem(window->contentItem(),"queueSearchButton")->hasActiveFocus(),"closing queue search restores focus to its entry point");
     // Exercise Quick jump through real keyboard/mouse input and the audio backend.
     QMetaObject::invokeMethod(window,"closeQueueSearch");player.select(0,false);player.pause();
     window->contentItem()->forceActiveFocus();testKeyClick(window,Qt::Key_K,Qt::ControlModifier);QTest::qWait(250);
@@ -974,6 +1172,17 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     check(!window->property("vinyl").toBool(),"switching back to CD restores the original renderer");
     check(!findItem(window->contentItem(),"vinylTonearm"),"switching to CD releases tonearm geometry");
     capture("02-queue-search");
+    if(auto *list=findItem(window->contentItem(),"trackList")) {
+        window->setProperty("queueQuery",QString());QMetaObject::invokeMethod(window,"closeQueueSearch");
+        QMetaObject::invokeMethod(list,"holdPosition");player.select(0);player.pause();QTest::qWait(100);
+        check(!list->property("following").toBool(),"queue updates preserve the user's browsing mode");
+        auto *currentButton=findItem(window->contentItem(),"currentQueueButton");
+        check(currentButton&&currentButton->isVisible(),"browsing away exposes a compact Current song action");
+        capture("25-queue-return");click("currentQueueButton");
+        check(list->property("following").toBool(),"Current song resumes automatic queue following");
+        player.select(1,false);player.pause();QMetaObject::invokeMethod(window,"openQueueSearch");QTest::qWait(100);
+    }
+
     search->setProperty("text", "no-such-track"); QTest::qWait(100);
     check(list->property("count").toInt()==0, "unmatched search shows an empty result set");
     testKeyClick(window, Qt::Key_Return);
@@ -1222,9 +1431,10 @@ int main(int argc, char **argv) {
     const qint64 applicationReady = startup.elapsed();
     app.setApplicationName("spun"); app.setApplicationDisplayName("Spun");
     app.setOrganizationName("Spun"); app.setApplicationVersion("0.1.0");
-    app.setDesktopFileName("spun"); app.setWindowIcon(QIcon(":/assets/spun.svg"));
+    app.setDesktopFileName("spun"); app.setWindowIcon(QIcon(":/assets/spun-window.png"));
     QCommandLineParser parser; parser.addHelpOption(); parser.addVersionOption();
-    parser.addOption({"benchmark", "Measure an isolated startup, idle, playing, or mini scene", "scene"});
+    parser.addOption({"benchmark", "Measure an isolated startup, idle, playing, mini, or cycle scene", "scene"});
+    parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"test-library", "Run isolated music browser checks"});
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
@@ -1284,6 +1494,7 @@ int main(int argc, char **argv) {
     if (!test) registerMpris(&player);
     qmlRegisterType<Symbol>("Spun", 1, 0, "Symbol");
     qmlRegisterType<Disc>("Spun", 1, 0, "Disc");
+    qmlRegisterType<ArtworkView>("Spun", 1, 0, "ArtworkView");
     qmlRegisterType<ProgressRing>("Spun", 1, 0, "ProgressRing");
     QQmlApplicationEngine engine;
     engine.addImageProvider("queueart", new QueueArtworkProvider);
@@ -1300,6 +1511,13 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("musicActions", &musicActions);
     engine.rootContext()->setContextProperty("listening", &listening);
     engine.rootContext()->setContextProperty("testMode", test);
+    const auto benchmarkMedium = parser.value("benchmark-medium");
+    if (parser.isSet("benchmark")) {
+        if (!QStringList{"cd","vinyl","cassette"}.contains(benchmarkMedium)) return 2;
+        player.setMedium(benchmarkMedium);
+    }
+    QList<double> frameIntervals;
+    qint64 lastFrameNs = 0;
     qint64 firstFrame = -1;
     int frames = 0;
     qint64 qmlReady = -1;
@@ -1316,6 +1534,9 @@ int main(int argc, char **argv) {
                         QTimer::singleShot(0, &app, &QCoreApplication::quit);
                     }
                 }
+                const auto now = startup.nsecsElapsed();
+                if (lastFrameNs && startup.elapsed() >= 2000) frameIntervals.append((now-lastFrameNs)/1e6);
+                lastFrameNs = now;
                 ++frames;
             });
     });
@@ -1328,13 +1549,18 @@ int main(int argc, char **argv) {
         window->setProperty("benchmarkPinned", true);
         player.setVolume(0);
         const auto scene = parser.value("benchmark");
-        if (scene != "startup" && scene != "idle" && scene != "playing" && scene != "mini") return 2;
+        if (scene != "startup" && scene != "idle" && scene != "playing" && scene != "mini" && scene != "cycle") return 2;
         if (scene == "playing" || scene == "mini") {
             player.setRepeatMode(2);
             player.demo();
             window->setProperty("progress", 0.75);
         }
         if (scene == "mini") player.setMiniMode(true);
+        if (scene == "cycle") {
+            QTimer::singleShot(250,&app,[&]{player.setMedium("vinyl");});
+            QTimer::singleShot(650,&app,[&]{player.setMedium("cassette");});
+            QTimer::singleShot(1100,&app,[&]{player.setMedium(benchmarkMedium);});
+        }
         QTimer::singleShot(2000, &app, [&, scene] {
             struct rusage before{}; getrusage(RUSAGE_SELF, &before);
             const int startFrames = frames;
@@ -1344,7 +1570,13 @@ int main(int argc, char **argv) {
                 QFile memory("/proc/self/smaps_rollup");
                 if (!memory.open(QIODevice::ReadOnly)) { app.exit(1); return; }
                 QJsonObject result{{"scene",scene},{"firstFrameMs",firstFrame},{"cpuSeconds",cpu(after)-cpu(before)},
-                    {"frames",frames-startFrames},{"memory",QString::fromUtf8(memory.readAll())}};
+                    {"frames",frames-startFrames},{"memory",QString::fromUtf8(memory.readAll())},
+                    {"medium",benchmarkMedium},{"objects",window->findChildren<QObject *>().size()}};
+                std::sort(frameIntervals.begin(),frameIntervals.end());
+                if (!frameIntervals.isEmpty()) {
+                    result["frameMedianMs"] = frameIntervals[frameIntervals.size()/2];
+                    result["frameP95Ms"] = frameIntervals[qMin(frameIntervals.size()-1,qsizetype(frameIntervals.size()*.95))];
+                }
                 std::cout << "BENCHMARK " << QJsonDocument(result).toJson(QJsonDocument::Compact).constData() << std::endl;
                 app.quit();
             });

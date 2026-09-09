@@ -3,11 +3,14 @@
 #include <QFontInfo>
 #include <QGuiApplication>
 #include <algorithm>
+#include <cmath>
 
 Typography::Typography(const QString &settingsPath, QObject *parent)
     : QObject(parent), m_settings(settingsPath, QSettings::IniFormat),
       m_selected(m_settings.value("fontFamily").toString()),
       m_system(QFontInfo(QFontDatabase::systemFont(QFontDatabase::GeneralFont)).family()) {
+    const auto savedScale=m_settings.value("uiScale",1.).toDouble();
+    m_scale=std::isfinite(savedScale)?qBound(.85,savedScale,1.5):1.;
     resolve();
     connect(qGuiApp, &QGuiApplication::fontDatabaseChanged, this, [this] {
         const bool loaded = m_loaded;
@@ -19,6 +22,12 @@ Typography::Typography(const QString &settingsPath, QObject *parent)
 }
 void Typography::resolve() {
     m_family = !m_selected.isEmpty() && QFontDatabase::hasFamily(m_selected) ? m_selected : m_system;
+}
+void Typography::setUiScale(qreal scale) {
+    if(!std::isfinite(scale))return;
+    scale=qBound(.85,scale,1.5);
+    if(qFuzzyCompare(m_scale,scale))return;
+    m_scale=scale;m_settings.setValue("uiScale",scale);m_settings.sync();emit scaleChanged();
 }
 void Typography::loadFamilies() {
     if (m_loaded) return;

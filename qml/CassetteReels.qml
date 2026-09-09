@@ -6,7 +6,7 @@ Item {
     readonly property real leftAngle: outgoing ? app.outgoingCassetteLeftAngle : app.cassetteLeftAngle
     readonly property real rightAngle: outgoing ? app.outgoingCassetteRightAngle : app.cassetteRightAngle
     property bool outgoing: false
-    readonly property real progress: Math.max(0, Math.min(1, app.progress))
+    readonly property real progress: Math.max(0, Math.min(1, app.cassetteVisualProgress))
     Repeater {
         model: 2
         Item {

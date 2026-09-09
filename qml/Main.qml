@@ -8,10 +8,15 @@ ApplicationWindow {
     objectName: "spunWindow"
     title: "Spun"
     visible: true
-    width: miniMode ? 300 : sideOpen ? 860 : 530
-    height: miniMode ? (showHorizontalSeek ? 382 : 354) : 730
-    minimumWidth: 300; maximumWidth: 860
-    minimumHeight: 300; maximumHeight: 730
+    readonly property real layoutWidth: miniMode ? 300 : sideOpen ? 860 : 530
+    readonly property real layoutHeight: miniMode ? (showHorizontalSeek ? 382 : 354) : 730
+    readonly property real uiScale: testMode ? typography.uiScale : Math.min(typography.uiScale,
+        Math.max(.5, (Screen.desktopAvailableWidth - 40) / layoutWidth),
+        Math.max(.5, (Screen.desktopAvailableHeight - 40) / layoutHeight))
+    width: Math.round(layoutWidth * uiScale); height: Math.round(layoutHeight * uiScale)
+    minimumWidth: 150; maximumWidth: 1290
+    minimumHeight: 150; maximumHeight: 1095
+    onUiScaleChanged: Qt.callLater(updateMask)
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | (miniPinned && !native.supportsBlur ? Qt.WindowStaysOnTopHint : 0)
     font.family: SpunStyle.family
@@ -61,7 +66,7 @@ ApplicationWindow {
         running: root.vinyl && player.vinylSkips && root.deckPlayer.playing && !root.needleDragging
         onTriggered: { root.skipGroove(); interval = 45000 + Math.floor(Math.random()*35000) }
     }
-    onUseCiderChanged: { recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
+    onUseCiderChanged: { cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
     property bool lyricsView: false
     property real swapOffset: 0
     property real outgoingOffset: 0
@@ -78,14 +83,14 @@ ApplicationWindow {
     function syncLibrary() { if (!visible || visibility === Window.Minimized) { songMenu.close(); musicBrowser.closeActions() }; library.active = libraryOpen && useCider && visible && visibility !== Window.Minimized }
     function syncLyrics() { lyrics.remote = useCider; lyrics.active = discFlipped && lyricsView && visible && visibility !== Window.Minimized }
     onLyricsViewChanged: { syncLyrics(); if (!lyricsView && lyricList.activeFocus) contentItem.forceActiveFocus() }
-    onVisibilityChanged: { syncLibrary(); syncLyrics(); if (root.visibility === Window.Minimized) stopSwap() }
-    onVisibleChanged: { syncLibrary(); syncLyrics(); if (!root.visible) stopSwap() }
-    onAnimateChanged: if (!animate) stopSwap()
+    onVisibilityChanged: { syncLibrary(); syncLyrics(); if (root.visibility === Window.Minimized) { stopSwap(); cancelSeekPreview() } }
+    onVisibleChanged: { syncLibrary(); syncLyrics(); if (!root.visible) { stopSwap(); cancelSeekPreview() } }
+    onAnimateChanged: if (!animate) { stopSwap(); tapeWindSpeed = 0 }
     property bool discFlipped: false
     readonly property var discDetails: deckPlayer.discDetails
     readonly property var albumTracks: discDetails.tracks || []
     onDiscFlippedChanged: {
-        scrubber.cancelScrub()
+        cancelSeekPreview(); scrubber.cancelScrub()
         stopSwap()
         root.ciderService.discVisible = discFlipped && useCider
         syncLyrics()
@@ -95,8 +100,8 @@ ApplicationWindow {
     onMiniPinnedChanged: native.effects(root, backgroundBlur)
     property bool miniMode: player.miniMode
     onMiniModeChanged: Qt.callLater(function() {
-        scrubber.cancelScrub(); stopSwap()
-        if (miniMode) { savedQueuePicker.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); songMenu.close(); musicBrowser.closeActions(); libraryOpen = false; queueOpen = false; helpOpen = false; menu.close(); miniReveal.restart() }
+        cancelSeekPreview(); scrubber.cancelScrub(); stopSwap()
+        if (miniMode) { artworkPopup.close(); savedQueuePicker.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); songMenu.close(); musicBrowser.closeActions(); libraryOpen = false; queueOpen = false; helpOpen = false; menu.close(); miniReveal.restart() }
         updateMask(); native.effects(root, backgroundBlur)
     })
     property bool editingText: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
@@ -157,9 +162,10 @@ ApplicationWindow {
         Qt.callLater(function() { queueSearch.forceActiveFocus(); queueSearch.selectAll() })
     }
     function closeQueueSearch() {
+        const restoreFocus = queueSearchOpen && queueOpen
         queueSearchOpen = false
         queueQuery = ""
-        if (queueSearch && queueSearch.activeFocus) contentItem.forceActiveFocus()
+        if (restoreFocus) queueSearchButton.forceActiveFocus(Qt.BacktabFocusReason)
     }
     property bool libraryOpen: false
     readonly property bool sideOpen: queueOpen || libraryOpen
@@ -270,7 +276,7 @@ ApplicationWindow {
         queueMenu.rowIndex = index; queueMenu.revision = root.ciderService.queueRevision
         const point = anchor.mapToItem(root.contentItem,0,anchor.height)
         queueMenu.x = jewelCase.x + jewelCase.width - queueMenu.width - 16
-        queueMenu.y = Math.max(jewelCase.y + 12,Math.min(root.height - queueMenu.height - 16,point.y))
+        queueMenu.y = Math.max(jewelCase.y + 12,Math.min(root.layoutHeight - queueMenu.height - 16,point.y))
         queueMenu.open()
     }
     Connections {
@@ -291,11 +297,15 @@ ApplicationWindow {
     }
     property bool queueOpen: false
     property bool helpOpen: false
-    readonly property bool menuOpen: recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
+    readonly property bool menuOpen: artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
     property bool backgroundBlur: player.backgroundBlur && native.supportsBlur
     onBackgroundBlurChanged: { native.effects(root, backgroundBlur); Qt.callLater(updateMask) }
     property bool muted: false
     property real rememberedVolume: .65
+    property var activeSeekControl: null
+    property real tapeWindSpeed: 0
+    readonly property real cassetteVisualProgress: activeSeekControl ? activeSeekControl.value : progress
+    function cancelSeekPreview() { if (activeSeekControl) activeSeekControl.cancelSeek() }
     property real cassetteLeftAngle: 0
     property real cassetteRightAngle: 0
     property real outgoingCassetteLeftAngle: 0
@@ -331,7 +341,22 @@ ApplicationWindow {
         if (root.deckPlayer.volume > 0) { rememberedVolume = root.deckPlayer.volume; root.deckPlayer.volume = 0 }
         else root.deckPlayer.volume = rememberedVolume > 0 ? rememberedVolume : .65
     }
-    function updateMask() { native.shape(root, sideOpen) }
+    Connections {
+        target: Overlay.overlay
+        function onXChanged() { if (target.x !== 0) target.x = 0 }
+        function onYChanged() { if (target.y !== 0) target.y = 0 }
+        function onWidthChanged() { if (target.width !== root.layoutWidth) target.width = root.layoutWidth }
+        function onHeightChanged() { if (target.height !== root.layoutHeight) target.height = root.layoutHeight }
+    }
+    function updateMask() {
+        native.shape(root, sideOpen)
+        // Popups share the logical scene; their overlay must use the same size.
+        Overlay.overlay.transformOrigin = Item.TopLeft
+        Overlay.overlay.scale = uiScale
+        Overlay.overlay.x = 0; Overlay.overlay.y = 0
+        Overlay.overlay.width = layoutWidth
+        Overlay.overlay.height = layoutHeight
+    }
     function toggleQueue() {
         if (miniMode) { player.miniMode = false; queueOpen = true }
         else queueOpen = !queueOpen
@@ -342,7 +367,7 @@ ApplicationWindow {
         menu.y = Qt.binding(function() { return Math.max(12,deck.y - menu.height - 10) })
         songMenu.close(); musicBrowser.closeActions(); menu.open()
     }
-    onQueueOpenChanged: { clearQueueSelection(); if (queueOpen) queuePrepared = true; queueMenu.close(); cancelQueueDrag(); if (queueOpen) libraryOpen = false; if (!queueOpen) closeQueueSearch(); if (queueOpen && miniMode) player.miniMode = false; root.ciderService.queueVisible = queueOpen && useCider; Qt.callLater(updateMask) }
+    onQueueOpenChanged: { clearQueueSelection(); if (queueOpen) { queuePrepared = true; trackList.following = true }; queueMenu.close(); cancelQueueDrag(); if (queueOpen) libraryOpen = false; if (!queueOpen) closeQueueSearch(); if (queueOpen && miniMode) player.miniMode = false; root.ciderService.queueVisible = queueOpen && useCider; Qt.callLater(updateMask) }
     onHelpOpenChanged: { if (helpOpen && miniMode) player.miniMode = false; Qt.callLater(updateMask) }
     onMenuOpenChanged: Qt.callLater(updateMask)
     onWidthChanged: Qt.callLater(updateMask)
@@ -351,7 +376,7 @@ ApplicationWindow {
 
     Rectangle {
         objectName: "blurBackdrop"
-        width: root.width; height: root.height
+        width: root.layoutWidth; height: root.layoutHeight
         visible: root.backgroundBlur
         color: Qt.alpha(root.inset, .18)
         radius: 28 * theme.radius
@@ -375,7 +400,7 @@ ApplicationWindow {
     Shortcut { sequence: "Up"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
     Shortcut { sequence: "Down"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
     Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: root.toggleMute() }
-    Shortcut { sequence: "Escape"; onActivated: { if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
+    Shortcut { sequence: "Escape"; onActivated: { if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
     Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
     Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: root.flipDisc() }
     Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: root.helpOpen = !root.helpOpen }
@@ -393,7 +418,7 @@ ApplicationWindow {
 
     Timer {
         interval: 16; repeat: true
-        running: root.animate && root.visible && root.visibility !== Window.Minimized && native.exposed && (root.deckPlayer.playing || root.spinSpeed > .02)
+        running: root.animate && root.visible && root.visibility !== Window.Minimized && native.exposed && (root.deckPlayer.playing || root.spinSpeed > .02 || root.activeSeekControl || Math.abs(root.tapeWindSpeed) > .5)
         property double lastTime: 0
         onRunningChanged: lastTime = Date.now()
         onTriggered: {
@@ -403,17 +428,21 @@ ApplicationWindow {
             const target = root.deckPlayer.playing ? (root.vinyl ? root.vinylDegreesPerSecond : 9) : 0
             root.spinSpeed += (target-root.spinSpeed)*Math.min(1,dt*2.2)
             if (!root.discFlipped) root.spinAngle = (root.spinAngle+root.spinSpeed*dt)%360
-            if (root.cassette && !root.discFlipped && root.deckPlayer.playing) {
-                const position = Math.max(0, Math.min(1, root.progress))
-                root.cassetteLeftAngle = (root.cassetteLeftAngle + dt * 10000 / Math.sqrt(1936 + 3993 * (1-position))) % 360
-                root.cassetteRightAngle = (root.cassetteRightAngle + dt * 10000 / Math.sqrt(1936 + 3993 * position)) % 360
+            const winding = root.cassette && root.activeSeekControl
+            const windTarget = winding && now-root.activeSeekControl.lastMove < 120 ? root.activeSeekControl.windDirection * 850 : 0
+            root.tapeWindSpeed += (windTarget-root.tapeWindSpeed)*Math.min(1,dt*18)
+            if (root.cassette && !root.discFlipped && (root.deckPlayer.playing || winding || Math.abs(root.tapeWindSpeed) > .5)) {
+                const position = Math.max(0, Math.min(1, root.cassetteVisualProgress))
+                const speed = winding || Math.abs(root.tapeWindSpeed) > .5 ? root.tapeWindSpeed * 55 : 10000
+                root.cassetteLeftAngle = (root.cassetteLeftAngle + dt * speed / Math.sqrt(1936 + 3993 * (1-position))) % 360
+                root.cassetteRightAngle = (root.cassetteRightAngle + dt * speed / Math.sqrt(1936 + 3993 * position)) % 360
             }
             if (root.deckPlayer.playing) root.wavePhase=(root.wavePhase+dt*2.8)%(2*Math.PI)
         }
     }
     Connections {
         target: root.deckPlayer
-        function onTrackChanged() { scrubber.cancelScrub(); if (!root.deckPlayer.count) root.discFlipped = false; Qt.callLater(root.presentDisc) }
+        function onTrackChanged() { root.cancelSeekPreview(); scrubber.cancelScrub(); if (!root.deckPlayer.count) root.discFlipped = false; Qt.callLater(root.presentDisc) }
         function onArtworkChanged() { Qt.callLater(root.presentDisc) }
         function onErrorChanged() { if (root.deckPlayer.error.length && root.miniMode) player.miniMode = false }
     }
@@ -506,7 +535,16 @@ ApplicationWindow {
         width: 440; height: 440; clip: true
         scale: root.miniMode ? .64 : 1
         transformOrigin: Item.TopLeft
-        HoverHandler { id: platterHover }
+        HoverHandler {
+            id: platterHover
+            readonly property point pointer: point.position
+            onHoveredChanged: updateLyricsHover()
+            onPointerChanged: updateLyricsHover()
+            function updateLyricsHover() {
+                const p = lyricList.mapFromItem(platter, pointer.x, pointer.y)
+                lyricList.updateHover(hovered, p.x, p.y)
+            }
+        }
         // Shadow is circular, so the player keeps its silhouette on any wallpaper.
         Repeater {
             model: root.cassette ? 0 : 7
@@ -527,7 +565,7 @@ ApplicationWindow {
             transform: Translate { x: root.outgoingOffset }
             sourceComponent: Item {
                 Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; artwork: presentation.outgoing; rotation: root.cassette ? 0 : root.outgoingAngle }
-                Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                Disc { visible: !root.cassette; cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
                 Loader { anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root; outgoing: true } }
             }
         }
@@ -556,7 +594,7 @@ ApplicationWindow {
                         artwork: presentation.artwork
                         rotation: root.cassette ? 0 : root.spinAngle
                     }
-                    Disc { cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                    Disc { visible: !root.cassette; cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
                     Loader { objectName: "cassetteReelsLoader"; anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root } }
                 }
                 back: Item {
@@ -688,11 +726,54 @@ ApplicationWindow {
                         activeFocusOnTab: root.discFlipped && root.lyricsView
                         Accessible.name: "Lyrics"
                         property bool following: true
+                        property var tipLine: null
+                        property var hoveredLine: null
+                        function updateHover(inside, x, y) {
+                            const index = inside && root.discFlipped && root.lyricsView && visible && !moving && x >= 0 && x < width && y >= 0 && y < height ? indexAt(x, y + contentY) : -1
+                            const line = index >= 0 ? itemAtIndex(index) : null
+                            if (hoveredLine !== line) {
+                                hoveredLine = line
+                                if (line) line.hintDismissed = false
+                                dismissSeekTip()
+                            }
+                            if (line && !line.hintDismissed) {
+                                const point = mapToItem(line, x, y)
+                                showSeekTip(line, point.x, point.y)
+                            }
+                        }
+                        property string tipText: ""
+                        property real tipOffset: 0
+                        function dismissSeekTip() { tipLine = null }
+                        function showSeekTip(line, x, y) {
+                            const point = line.mapToItem(lyricList, x, y)
+                            if (!moving && root.discFlipped && root.lyricsView && line.seekable && point.x >= 0 && point.x < width && point.y >= 0 && point.y < height) {
+                                tipText = "Seek to " + root.time(line.modelData.start)
+                                tipOffset = Math.max(0, line.y - contentY)
+                                tipLine = line
+                            } else if (tipLine === line) dismissSeekTip()
+                        }
+                        onContentYChanged: { dismissSeekTip(); hoveredLine = null }
+                        onVisibleChanged: dismissSeekTip()
+                        Connections {
+                            target: root
+                            function onDiscFlippedChanged() { lyricList.dismissSeekTip() }
+                            function onLyricsViewChanged() { lyricList.dismissSeekTip() }
+                            function onMiniModeChanged() { lyricList.dismissSeekTip() }
+                            function onVisibleChanged() { lyricList.dismissSeekTip() }
+                            function onActiveChanged() { if (!root.active) lyricList.dismissSeekTip() }
+                            function onMenuOpenChanged() { if (root.menuOpen) lyricList.dismissSeekTip() }
+                        }
+                        SpunToolTip {
+                            objectName: "lyricSeekToolTip"; parent: lyricList
+                            visible: !!lyricList.tipLine && lyricList.visible && root.visible && root.discFlipped && root.lyricsView && !root.menuOpen && !lyricList.moving
+                            text: lyricList.tipText
+                            y: lyricList.tipOffset - height - 8
+                        }
                         function followLine() {
                             if (following && lyrics.currentIndex >= 0) positionViewAtIndex(lyrics.currentIndex, ListView.Beginning)
                         }
-                        onModelChanged: { following = true; Qt.callLater(function() { positionViewAtBeginning(); followLine() }) }
-                        onMovementStarted: following = false
+                        onModelChanged: { dismissSeekTip(); following = true; Qt.callLater(function() { positionViewAtBeginning(); followLine() }) }
+                        onMovementStarted: { following = false; dismissSeekTip() }
                         Keys.onPressed: event => {
                             if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
                                 following = false; contentY = Math.max(0, Math.min(Math.max(0, contentHeight-height), contentY + (event.key===Qt.Key_Down ? 30 : -30))); event.accepted = true
@@ -710,8 +791,10 @@ ApplicationWindow {
                             objectName: "lyricLine" + index
                             required property var modelData
                             required property int index
+                            property bool hintDismissed: false
                             readonly property bool seekable: lyrics.timed && !lyrics.loading && modelData.start >= 0 && modelData.start < root.deckPlayer.duration && (!root.useCider || root.ciderService.canSeek)
                             function seekHere() {
+                                lyricList.dismissSeekTip()
                                 if (seekable && lyrics.seekToLine(index)) {
                                     lyricList.following = true
                                     lyricList.forceActiveFocus()
@@ -722,21 +805,25 @@ ApplicationWindow {
                             text: modelData.text; textFormat: Text.PlainText
                             wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
                             font.pixelSize: root.miniMode ? 19 : 15
-                            color: (seekable && lyricHit.containsMouse) || (lyrics.timed && index === lyrics.currentIndex) ? root.accent : root.ink
-                            opacity: lyrics.timed && index !== lyrics.currentIndex && !(seekable && lyricHit.containsMouse) ? .62 : 1
+                            color: (seekable && lyricList.hoveredLine === lyricLine) || (lyrics.timed && index === lyrics.currentIndex) ? root.accent : root.ink
+                            opacity: lyrics.timed && index !== lyrics.currentIndex && !(seekable && lyricList.hoveredLine === lyricLine) ? .62 : 1
                             Behavior on color { ColorAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
                             Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
                             Accessible.role: seekable ? Accessible.Button : Accessible.StaticText
                             Accessible.name: text
                             Accessible.onPressAction: seekHere()
-                            SpunToolTip { visible: lyricLine.seekable && lyricHit.containsMouse; text: "Seek to " + root.time(lyricLine.modelData.start) }
+                            Component.onDestruction: {
+                                if (lyricList.tipLine === lyricLine) lyricList.dismissSeekTip()
+                                if (lyricList.hoveredLine === lyricLine) lyricList.hoveredLine = null
+                            }
                             MouseArea {
                                 id: lyricHit
                                 objectName: "lyricHit" + lyricLine.index
-                                anchors.fill: parent; hoverEnabled: true
+                                anchors.fill: parent
                                 enabled: lyricLine.seekable
                                 cursorShape: Qt.PointingHandCursor
                                 preventStealing: false
+                                onPressed: { lyricLine.hintDismissed = true; lyricList.dismissSeekTip() }
                                 onClicked: lyricLine.seekHere()
                                 onDoubleClicked: mouse => { mouse.accepted = true }
                             }
@@ -895,9 +982,12 @@ ApplicationWindow {
             id: scrubber
             objectName: "scrubber"
             anchors.fill: parent
+            // Reverse-side lyrics keep their hover input; the rim remains seekable.
+            containmentMask: QtObject { function contains(point) { return !root.discFlipped || scrubber.onRim(point.x, point.y) } }
             hoverEnabled: true
             property bool scrubbing: false
             property real previewFraction: 0
+            property real lastFraction: 0
             readonly property bool canSeek: !root.swapRunning && root.deckPlayer.duration > 0 && (!root.useCider || root.ciderService.canSeek)
             readonly property bool showPreview: canSeek && (scrubbing || (containsMouse && onRim(mouseX,mouseY)))
             cursorShape: canSeek && onRim(mouseX,mouseY) ? Qt.PointingHandCursor : Qt.ArrowCursor
@@ -907,12 +997,21 @@ ApplicationWindow {
                 if (a < 0) a += 2*Math.PI
                 previewFraction = a/(2*Math.PI)
             }
+            function dragPreview(x,y,fine) {
+                const previous=previewFraction
+                updatePreview(x,y)
+                const pointer=previewFraction
+                let delta=pointer-lastFraction
+                if(delta>.5)delta-=1;else if(delta < -.5)delta+=1
+                previewFraction=Math.max(0,Math.min(1,previous+delta*(fine?.1:1)))
+                lastFraction=pointer
+            }
             function cancelScrub() { scrubbing = false }
             onPressed: mouse => {
-                if (onRim(mouse.x,mouse.y) && canSeek) { updatePreview(mouse.x,mouse.y); scrubbing=true }
+                if (onRim(mouse.x,mouse.y) && canSeek) { updatePreview(mouse.x,mouse.y); lastFraction=previewFraction; if(mouse.modifiers & Qt.ShiftModifier)previewFraction=root.progress; scrubbing=true }
                 else mouse.accepted=false
             }
-            onPositionChanged: mouse => { if (scrubbing || onRim(mouse.x,mouse.y)) updatePreview(mouse.x,mouse.y) }
+            onPositionChanged: mouse => { if(scrubbing)dragPreview(mouse.x,mouse.y,mouse.modifiers & Qt.ShiftModifier);else if(onRim(mouse.x,mouse.y))updatePreview(mouse.x,mouse.y) }
             onReleased: {
                 if (scrubbing && canSeek) root.deckPlayer.seek(root.deckPlayer.duration * previewFraction)
                 scrubbing=false
@@ -997,7 +1096,7 @@ ApplicationWindow {
         color: root.surface; border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
         SpunText {
-            objectName: "songTitle"
+            id: playerSongTitle; objectName: "songTitle"
             x: 24; y: 16; width: root.useCider ? 238 : 272
             text: root.deckPlayer.title; color: root.ink; elide: Text.ElideRight
             font.pixelSize: SpunStyle.title; font.weight: Font.Normal
@@ -1020,7 +1119,10 @@ ApplicationWindow {
             contentItem: SpunText { text: root.deckPlayer.artist; color: playerArtist.hovered || playerArtist.visualFocus ? root.accent : root.mutedInk; elide: Text.ElideRight; font.pixelSize: SpunStyle.body; verticalAlignment: Text.AlignVCenter; font.underline: playerArtist.hovered || playerArtist.visualFocus }
         }
         SpunText {
-            x: 307; y: 18; width: 77; horizontalAlignment: Text.AlignRight
+            objectName: "elapsedTime"
+            anchors.baseline: playerSongTitle.baseline
+            anchors.right: parent.right; anchors.rightMargin: 24
+            width: 77; horizontalAlignment: Text.AlignRight
             text: root.time(root.deckPlayer.position); color: root.mutedInk
             font.pixelSize: 13
         }
@@ -1107,12 +1209,24 @@ ApplicationWindow {
             app: root
             id: queueSearch
             objectName: "queueSearchInput"
-            x: 24; y: 20; width: 214; height: SpunStyle.target
+            x: 64; y: 20; width: 222; height: SpunStyle.target; searchIcon: false
             visible: root.queueSearchOpen
             text: root.queueQuery
             onTextChanged: root.queueQuery = text
             placeholderText: "Song or artist"
             Accessible.name: "Search queue"
+            Keys.onDownPressed: {
+                if (trackList.count) {
+                    trackList.keyboardIndex = 0
+                    trackList.positionViewAtIndex(0, ListView.Contain)
+                    trackList.forceActiveFocus(Qt.TabFocusReason)
+                }
+            }
+            IconButton {
+                objectName: "clearQueueSearch"; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                visible: queueSearch.text.length > 0; glyphName: "close"; tip: "Clear search"; ink: root.mutedInk
+                onClicked: { root.queueQuery = ""; queueSearch.forceActiveFocus() }
+            }
             onAccepted: {
                 if (root.filteredQueue.length && (!root.useCider || (root.ciderService.queueReady && !root.ciderService.queueError.length)))
                     root.deckPlayer.select(root.filteredQueue[0].sourceIndex)
@@ -1120,9 +1234,9 @@ ApplicationWindow {
         }
         IconButton { objectName: "savedQueueMenuButton"; visible: root.useCider && !root.queueSearchOpen; x: 204; y: 20; glyphName: "more"; tip: "Queue actions"; ink: root.mutedInk; onClicked: savedQueueMenu.open() }
         IconButton {
-            objectName: "queueSearchButton"
-            x: 246; y: 20; width: 40; height: 40
-            glyphName: root.queueSearchOpen ? "close" : "search"
+            id: queueSearchButton; objectName: "queueSearchButton"
+            x: root.queueSearchOpen ? 16 : 246; y: 20; width: 40; height: 40
+            glyphName: root.queueSearchOpen ? "back" : "search"
             tip: root.queueSearchOpen ? "Close search" : "Search queue · Ctrl+F"
             ink: root.queueSearchOpen ? root.accent : root.mutedInk; hoverFill: root.hoverFill
             onClicked: root.queueSearchOpen ? root.closeQueueSearch() : root.openQueueSearch()
@@ -1135,40 +1249,60 @@ ApplicationWindow {
             IconButton { objectName: "clearQueueSelection"; x: parent.width - 42; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Clear selection · Esc"; ink: root.mutedInk; onClicked: root.clearQueueSelection() }
         }
         Rectangle { x: 30; y: 65; width: 252; height: 1; color: root.hairline }
+        SpunButton {
+            id: currentQueueButton; objectName: "currentQueueButton"
+            text: "Current song"; tonal: true
+            visible: !trackList.following && trackList.playingIndex >= 0 && !root.queueQuery.trim().length && !root.libraryDragging
+            x: (parent.width-width)/2; y: queueFooter.y-52; width: 140; height: 36
+            onClicked: { trackList.followCurrent(); trackList.forceActiveFocus(Qt.TabFocusReason) }
+        }
         ListView {
             id: trackList
+            property bool following: true
+            property real readingY: 0
+            function followCurrent() { following = true; if(currentIndex >= 0) positionViewAtIndex(currentIndex,ListView.Contain) }
+            function holdPosition() { following = false; readingY = contentY }
+            onDraggingChanged: if(dragging) holdPosition()
+            onFlickingChanged: if(flicking) holdPosition()
+            onContentYChanged: if(!following && moving) readingY = contentY
+            onMovementEnded: if(!following) readingY = contentY
+            WheelHandler { target: null; blocking: false; acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad; onWheel: event => { trackList.holdPosition(); Qt.callLater(function(){trackList.readingY=trackList.contentY}) } }
             objectName: "trackList"
             activeFocusOnTab: visible
             property int keyboardIndex: -1
             Keys.onPressed: event => {
                 if (root.useCider && event.key === Qt.Key_A && (event.modifiers & Qt.ControlModifier)) { root.selectUpcomingQueue(); event.accepted = true
                 } else if (root.useCider && event.key === Qt.Key_Space) {
-                    const row = root.filteredQueue[keyboardIndex < 0 ? currentIndex : keyboardIndex]
+                    const row = root.filteredQueue[keyboardIndex < 0 ? playingIndex : keyboardIndex]
                     if (row) root.chooseQueueRow(row.sourceIndex, event.modifiers | Qt.ControlModifier)
                     event.accepted = true
                 } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
-                    if ((event.modifiers & Qt.ShiftModifier) && root.queueSelectionAnchor < 0) root.queueSelectionAnchor = root.filteredQueue[Math.max(0, keyboardIndex < 0 ? currentIndex : keyboardIndex)]?.sourceIndex ?? -1
-                    keyboardIndex = Math.max(0, Math.min(count - 1, (keyboardIndex < 0 ? currentIndex : keyboardIndex) + (event.key === Qt.Key_Down ? 1 : -1)))
+                    holdPosition()
+                    if ((event.modifiers & Qt.ShiftModifier) && root.queueSelectionAnchor < 0) root.queueSelectionAnchor = root.filteredQueue[Math.max(0, keyboardIndex < 0 ? playingIndex : keyboardIndex)]?.sourceIndex ?? -1
+                    keyboardIndex = Math.max(0, Math.min(count - 1, (keyboardIndex < 0 ? playingIndex : keyboardIndex) + (event.key === Qt.Key_Down ? 1 : -1)))
                     if ((event.modifiers & Qt.ShiftModifier) && root.filteredQueue[keyboardIndex]) root.chooseQueueRow(root.filteredQueue[keyboardIndex].sourceIndex, event.modifiers)
-                    positionViewAtIndex(keyboardIndex, ListView.Contain); event.accepted = true
+                    positionViewAtIndex(keyboardIndex, ListView.Contain); readingY=contentY; event.accepted = true
                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    const row = root.filteredQueue[keyboardIndex < 0 ? currentIndex : keyboardIndex]
+                    const row = root.filteredQueue[keyboardIndex < 0 ? playingIndex : keyboardIndex]
                     if (row && root.queueControlsReady) { if (root.queueSelectionCount) root.openQueueSelectionActions(trackList); else root.deckPlayer.select(row.sourceIndex) }
                     event.accepted = true
                 } else if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
-                    const row = itemAtIndex(keyboardIndex < 0 ? currentIndex : keyboardIndex)
+                    const row = itemAtIndex(keyboardIndex < 0 ? playingIndex : keyboardIndex)
                     if (row) root.showQueueActions(row.sourceIndex, row)
                     event.accepted = true
                 }
             }
-            x: SpunStyle.inset; y: 80; width: parent.width - 2 * SpunStyle.inset; height: queueFooter.y - 2 * SpunStyle.gap - y - (root.useCider && root.ciderService.queueError.length ? 32 : 0)
+            x: SpunStyle.inset; y: 80; width: parent.width - 2 * SpunStyle.inset; height: queueFooter.y - 2 * SpunStyle.gap - y - (currentQueueButton.visible ? 44 : 0) - (root.useCider && root.ciderService.queueError.length ? 32 : 0)
             model: root.filteredQueue; clip: true; spacing: SpunStyle.smallGap
             visible: !root.useCider || root.ciderService.queueReady
-            currentIndex: root.filteredQueue.findIndex(row => row.sourceIndex === root.deckPlayer.currentIndex)
-            onCurrentIndexChanged: if (currentIndex >= 0 && !root.queueQuery.trim().length) positionViewAtIndex(currentIndex, ListView.Contain)
+            readonly property int playingIndex: root.filteredQueue.findIndex(row => row.sourceIndex === root.deckPlayer.currentIndex)
+            // Qt also follows currentIndex internally; release it while the user browses.
+            currentIndex: following ? playingIndex : -1
+            onCurrentIndexChanged: if (following && currentIndex >= 0 && !root.queueQuery.trim().length) positionViewAtIndex(currentIndex, ListView.Contain)
             onModelChanged: Qt.callLater(function() {
                 if (root.queueQuery.trim().length) positionViewAtBeginning()
-                else if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+                else if (following && currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+                else if(!following) contentY=Math.max(originY,Math.min(readingY,originY+Math.max(0,contentHeight-height)))
             })
             // Keep the pointer grab on the view, so long drags survive delegate recycling.
             MouseArea {
@@ -1384,8 +1518,8 @@ ApplicationWindow {
         onClosed: preview = ({})
         readonly property bool stale: root.ciderService.queueRevision !== preview.revision || !root.ciderService.queueReady || root.ciderService.queueError.length > 0
         focus: true; modal: true; popupType: Popup.Item; padding: 24
-        x: (root.width - width) / 2; y: (root.height - height) / 2
-        width: 360; height: Math.min(440, root.height - 48, 196 + (preview.rows || []).length * 64)
+        x: (root.layoutWidth - width) / 2; y: (root.layoutHeight - height) / 2
+        width: 360; height: Math.min(440, root.layoutHeight - 48, 196 + (preview.rows || []).length * 64)
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
@@ -1429,7 +1563,7 @@ ApplicationWindow {
         onClosed: renameTarget = ({})
         function submit(name) { if (renameTarget.id ? service.renameSavedQueue(renameTarget, name) : service.saveQueue(name)) close() }
         focus: true; modal: true; popupType: Popup.Item
-        x: (root.width - width) / 2; y: 220; width: 330; height: 200; padding: 24
+        x: (root.layoutWidth - width) / 2; y: 220; width: 330; height: 200; padding: 24
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
@@ -1444,7 +1578,7 @@ ApplicationWindow {
     }
     Popup {
         id: deleteQueuePopup; focus: true; modal: true; popupType: Popup.Item; property string queueId: ""; property var service: library
-        x: (root.width - width) / 2; y: 240; width: 330; height: 132; padding: 24
+        x: (root.layoutWidth - width) / 2; y: 240; width: 330; height: 132; padding: 24
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
         Overlay.modal: Rectangle { color: Qt.alpha("black", .32) }
         enter: SpunPopupEnter {}
@@ -1495,11 +1629,36 @@ ApplicationWindow {
         onAboutToShow: root.actionService.observing = true
         onClosed: root.actionService.observing = false
     }
+    function showArtwork() {
+        if(!deckPlayer.count)return
+        if(miniMode) { player.miniMode=false;Qt.callLater(showArtwork);return }
+        menu.close();songMenu.close();artworkPopup.open()
+    }
+    Popup {
+        id: artworkPopup; objectName: "artworkPopup"; parent: Overlay.overlay
+        popupType: Popup.Item; modal: true; dim: false; focus: true
+        width: 466; height: 530; x: (root.layoutWidth-width)/2; y: (root.layoutHeight-height)/2; padding: 24
+        background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
+        enter: SpunPopupEnter {}
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit } }
+        onOpened: if(contentItem.item)contentItem.item.focusClose()
+        onClosed: menuButton.forceActiveFocus(Qt.BacktabFocusReason)
+        contentItem: Loader { active: artworkPopup.visible; sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: "Album artwork"
+            function focusClose() { artworkClose.forceActiveFocus(Qt.TabFocusReason) }
+            SpunText { width: parent.width-48; text: root.deckPlayer.album || root.deckPlayer.title; elide: Text.ElideRight; color: root.ink; font.pixelSize: SpunStyle.heading }
+            IconButton { id: artworkClose; objectName: "artworkClose"; anchors.right: parent.right; y: -8; glyphName: "close"; ink: root.ink; tip: "Close · Esc"; onClicked: artworkPopup.close() }
+            ArtworkView {
+                id: fullArtwork; objectName: "fullArtwork"; y: 48; width: parent.width; height: parent.height-y; artwork: root.deckPlayer.artwork
+                SpunText { anchors.centerIn: parent; visible: !fullArtwork.hasArtwork; text: "No artwork available"; color: root.mutedInk; font.pixelSize: SpunStyle.body }
+            }
+        } }
+    }
     function showAudioQuality() { qualityPopup.open();root.ciderService.refreshAudioQuality() }
     Popup {
         id: qualityPopup; objectName: "audioQualityPopup"
         popupType: Popup.Item; focus: true; width: 340; height: 176; padding: 20
-        x: (root.width - width) / 2; y: Math.min(root.height - height - 24, 330)
+        x: (root.layoutWidth - width) / 2; y: Math.min(root.layoutHeight - height - 24, 330)
         onVisibleChanged: Qt.callLater(root.updateMask)
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
@@ -1514,15 +1673,16 @@ ApplicationWindow {
     function showRecovery() { recoveryPopup.open(); root.listeningService.prepareRecovery() }
     Popup {
         id: recoveryPopup; objectName: "recoveryPopup"
-        parent: Overlay.overlay; x: (parent.width - width) / 2; y: (parent.height - height) / 2
-        width: Math.min(420, root.width - 24); height: Math.min(260, root.height - 24)
+        parent: Overlay.overlay; x: (root.layoutWidth - width) / 2; y: (root.layoutHeight - height) / 2
+        width: Math.min(420, root.layoutWidth - 24); height: Math.min(260, root.layoutHeight - 24)
         padding: 24; modal: true; dim: false; focus: true; popupType: Popup.Item
         background: Rectangle { radius: SpunStyle.popupRadius; color: SpunStyle.popup }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit } }
-        onOpened: recoveryCancel.forceActiveFocus()
+        onOpened: if (contentItem.item) contentItem.item.focusCancel()
         onClosed: root.listeningService.cancelRecovery()
-        contentItem: Item {
+        contentItem: Loader { active: recoveryPopup.visible; sourceComponent: Item {
+            function focusCancel() { recoveryCancel.forceActiveFocus() }
             SpunText { text: "Recover session"; font.pixelSize: SpunStyle.heading; color: root.ink }
             SpunText {
                 y: 38; width: parent.width; height: 112; wrapMode: Text.WordWrap; maximumLineCount: 5; elide: Text.ElideRight
@@ -1534,7 +1694,7 @@ ApplicationWindow {
                 enabled: !root.listeningService.busy && !!root.listeningService.session.trackCount && root.ciderService.queueReady && !root.ciderService.queueBusy && !root.ciderService.controlBusy && !root.ciderService.queueError.length && root.ciderService.queue.length === 0 && !root.actionService.busy
                 onClicked: root.listeningService.restoreSession()
             }
-        }
+        } }
         Connections { target: root.listeningService; function onFeedback(message, error) { if (recoveryPopup.visible && !error && !root.listeningService.busy) recoveryPopup.close() } }
     }
     function notifyAction(message, error) { actionNotice.text = message; actionNotice.failed = error; actionNotice.savedUndo = false; actionNotice.undo = !error && message === "Removed from queue" && root.ciderService.canUndoQueue; noticeTimer.interval = error || actionNotice.undo ? 8000 : 2200; noticeTimer.restart() }
@@ -1603,6 +1763,7 @@ ApplicationWindow {
         SettingsAction { objectName: "preferencesAction"; text: "Preferences"; glyphName: "settings"; onTriggered: Qt.callLater(function() { preferences.open() }) }
         SettingsAction { text: "Play demo"; glyphName: "play"; onTriggered: { root.useLocal(); player.demo() } }
         SettingsGap {}
+        SettingsAction { objectName: "viewArtworkAction"; text: "View artwork"; glyphName: "artwork"; enabled: root.deckPlayer.count > 0; onTriggered: root.showArtwork() }
         SettingsAction { text: "Keyboard shortcuts"; glyphName: "keyboard"; hint: "F1"; onTriggered: root.helpOpen = true }
         SettingsAction { text: "Quit Spun"; glyphName: "power"; hint: "Ctrl+Q"; onTriggered: Qt.quit() }
     }
@@ -1613,110 +1774,136 @@ ApplicationWindow {
         popupType: Popup.Item; focus: true
         x: deck.x + deck.width - width
         y: Math.max(12, deck.y - height - 12)
-        width: 352; height: Math.min(496, preferenceItems.implicitHeight + 72)
+        width: 352; height: Math.min(496, (contentItem.item ? contentItem.item.contentHeight : 424) + 72)
         padding: 12
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         onAboutToShow: fontPicker.prepare()
         onAboutToHide: fontPicker.close()
-        onOpened: {  if (root.useCider) root.ciderService.refreshModes(); closePreferences.forceActiveFocus() }
+        onOpened: {  if (root.useCider) root.ciderService.refreshModes(); if (contentItem.item) contentItem.item.focusClose() }
         onClosed: { fontPicker.close(); menuButton.forceActiveFocus() }
-        contentItem: Item {
-            SpunText { x: 12; y: 10; text: "Preferences"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
-            IconButton { id: closePreferences; objectName: "closePreferences"; anchors.right: parent.right; glyphName: "close"; tip: "Close preferences"; ink: root.ink; onClicked: preferences.close() }
-            Flickable {
-                id: preferenceScroll
-                x: 0; y: 48; width: parent.width; height: parent.height - y
-                contentHeight: preferenceItems.implicitHeight; clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar { }
-                function reveal(item) { const p = item.mapToItem(preferenceItems, 0, 0); if (p.y < contentY) contentY = p.y; else if (p.y + item.height > contentY + height) contentY = p.y + item.height - height }
-                Column {
-                    id: preferenceItems; width: parent.width; spacing: 4
-                    Row {
-                        width: parent.width; height: 48; spacing: 4
-                        Repeater {
-                            id: recordChoices
-                            model: ["CD", "Vinyl", "Cassette"]
-                            delegate: AbstractButton {
-                                id: recordChoice
-                                required property string modelData
-                                required property int index
-                                objectName: modelData.toLowerCase() + "StyleButton"
-                                width: (preferenceItems.width - 8) / 3; height: SpunStyle.target
-                                text: modelData; checkable: true; autoExclusive: true; checked: player.medium === modelData.toLowerCase(); hoverEnabled: true
-                                Accessible.name: modelData + " appearance"; Accessible.checked: checked
-                                Keys.onLeftPressed: recordChoices.itemAt(Math.max(0,index-1)).forceActiveFocus(Qt.TabFocusReason)
-                                Keys.onRightPressed: recordChoices.itemAt(Math.min(2,index+1)).forceActiveFocus(Qt.TabFocusReason)
-                                Keys.onReturnPressed: clicked()
-                                Keys.onEnterPressed: clicked()
-                                onClicked: player.medium = modelData.toLowerCase()
-                                onActiveFocusChanged: if(activeFocus) preferenceScroll.reveal(this)
-                                background: Rectangle {
-                                    radius: 20 * theme.radius; color: "transparent"
-                                    border.width: recordChoice.visualFocus ? 2 : 0; border.color: root.accent
-                                    Rectangle { anchors.fill: parent; radius: parent.radius; color: SpunStyle.selected; opacity: recordChoice.checked ? 1 : 0
-                                        Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
-                                    }
-                                    SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: recordChoice.hovered; pressed: recordChoice.down; focused: recordChoice.visualFocus }
-                                }
-                                contentItem: SpunText { text: recordChoice.text; color: recordChoice.checked ? root.accent : root.mutedInk; font.pixelSize: SpunStyle.body; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                        }
-                    }
-
-                    AbstractButton {
-                        id: fontChoice
-                        objectName: "fontChoice"
-                        width: parent.width; implicitHeight: 60
-                        hoverEnabled: true; focusPolicy: Qt.StrongFocus
-                        Accessible.name: "Font: " + typography.family
-                        onClicked: fontPicker.open()
-                        onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this)
-                        background: Rectangle {
-                            radius: SpunStyle.rowRadius; color: "transparent"
-                            border.width: fontChoice.visualFocus ? 2 : 0; border.color: root.accent
-                            SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: fontChoice.hovered; pressed: fontChoice.down; focused: fontChoice.visualFocus }
-                        }
-                        contentItem: Item {
-                            SpunText { x: 12; y: 7; text: "Font"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
-                            SpunText { x: 12; y: 27; width: parent.width - 52; text: typography.selectedFamily.length && !typography.missing ? typography.family : "System default"; color: root.ink; font.pixelSize: SpunStyle.body; elide: Text.ElideRight }
-                            Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; name: "down"; ink: root.mutedInk }
-                        }
-                    }
+        contentItem: Loader {
+            active: preferences.visible
+            sourceComponent: Item {
+                readonly property real contentHeight: preferenceItems.implicitHeight
+                function focusClose() { closePreferences.forceActiveFocus() }
+                function focusFont() { fontChoice.forceActiveFocus() }
+                SpunText { x: 12; y: 10; text: "Preferences"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+                IconButton { id: closePreferences; objectName: "closePreferences"; anchors.right: parent.right; glyphName: "close"; tip: "Close preferences"; ink: root.ink; onClicked: preferences.close() }
+                Flickable {
+                    id: preferenceScroll
+                    x: 0; y: 48; width: parent.width; height: parent.height - y
+                    contentHeight: preferenceItems.implicitHeight; clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    ScrollBar.vertical: ScrollBar { }
+                    function reveal(item) { const p = item.mapToItem(preferenceItems, 0, 0); if (p.y < contentY) contentY = p.y; else if (p.y + item.height > contentY + height) contentY = p.y + item.height - height }
                     Column {
-                        width: parent.width; spacing: 4; visible: root.vinyl
-                        SpunText { x: 12; text: "Record speed"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+                        id: preferenceItems; width: parent.width; spacing: 4
                         Row {
-                            width: parent.width; spacing: 4
+                            width: parent.width; height: 48; spacing: 4
                             Repeater {
-                                model: ["Relaxed", "33⅓ RPM", "45 RPM"]
-                                SpunButton {
+                                id: recordChoices
+                                model: ["CD", "Vinyl", "Cassette"]
+                                delegate: AbstractButton {
+                                    id: recordChoice
                                     required property string modelData
                                     required property int index
-                                    objectName: "vinylSpeed" + index
-                                    width: (preferenceItems.width - 8) / 3; height: 40
-                                    text: modelData; checkable: true; autoExclusive: true; tonal: checked; checked: player.vinylSpeed === [0,33,45][index]
-                                    onClicked: player.vinylSpeed = [0,33,45][index]
-                                    onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
+                                    objectName: modelData.toLowerCase() + "StyleButton"
+                                    width: (preferenceItems.width - 8) / 3; height: SpunStyle.target
+                                    text: modelData; checkable: true; autoExclusive: true; checked: player.medium === modelData.toLowerCase(); hoverEnabled: true
+                                    Accessible.name: modelData + " appearance"; Accessible.checked: checked
+                                    Keys.onLeftPressed: recordChoices.itemAt(Math.max(0,index-1)).forceActiveFocus(Qt.TabFocusReason)
+                                    Keys.onRightPressed: recordChoices.itemAt(Math.min(2,index+1)).forceActiveFocus(Qt.TabFocusReason)
+                                    Keys.onReturnPressed: clicked()
+                                    Keys.onEnterPressed: clicked()
+                                    onClicked: player.medium = modelData.toLowerCase()
+                                    onActiveFocusChanged: if(activeFocus) preferenceScroll.reveal(this)
+                                    background: Rectangle {
+                                        radius: 20 * theme.radius; color: "transparent"
+                                        border.width: recordChoice.visualFocus ? 2 : 0; border.color: root.accent
+                                        Rectangle { anchors.fill: parent; radius: parent.radius; color: SpunStyle.selected; opacity: recordChoice.checked ? 1 : 0
+                                            Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+                                        }
+                                        SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: recordChoice.hovered; pressed: recordChoice.down; focused: recordChoice.visualFocus }
+                                    }
+                                    contentItem: SpunText { text: recordChoice.text; color: recordChoice.checked ? root.accent : root.mutedInk; font.pixelSize: SpunStyle.body; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                                 }
                             }
                         }
+
+                        AbstractButton {
+                            id: fontChoice
+                            objectName: "fontChoice"
+                            width: parent.width; implicitHeight: 60
+                            hoverEnabled: true; focusPolicy: Qt.StrongFocus
+                            Accessible.name: "Font: " + typography.family
+                            onClicked: fontPicker.open()
+                            onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this)
+                            background: Rectangle {
+                                radius: SpunStyle.rowRadius; color: "transparent"
+                                border.width: fontChoice.visualFocus ? 2 : 0; border.color: root.accent
+                                SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: fontChoice.hovered; pressed: fontChoice.down; focused: fontChoice.visualFocus }
+                            }
+                            contentItem: Item {
+                                SpunText { x: 12; y: 7; text: "Font"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+                                SpunText { x: 12; y: 27; width: parent.width - 52; text: typography.selectedFamily.length && !typography.missing ? typography.family : "System default"; color: root.ink; font.pixelSize: SpunStyle.body; elide: Text.ElideRight }
+                                Glyph { anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; name: "down"; ink: root.mutedInk }
+                            }
+                        }
+                        Column {
+                            width: parent.width; spacing: 4; visible: root.vinyl
+                            SpunText { x: 12; text: "Record speed"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+                            Row {
+                                width: parent.width; spacing: 4
+                                Repeater {
+                                    model: ["Relaxed", "33⅓ RPM", "45 RPM"]
+                                    SpunButton {
+                                        required property string modelData
+                                        required property int index
+                                        objectName: "vinylSpeed" + index
+                                        width: (preferenceItems.width - 8) / 3; height: 40
+                                        text: modelData; checkable: true; autoExclusive: true; tonal: checked; checked: player.vinylSpeed === [0,33,45][index]
+                                        onClicked: player.vinylSpeed = [0,33,45][index]
+                                        onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
+                                    }
+                                }
+                            }
+                        }
+                        PreferenceSwitch { objectName: "horizontalSeekToggle"; app: root; width: parent.width; visible: !root.cassette; height: visible ? implicitHeight : 0; text: "Horizontal progress bar"; glyphName: "minus"; checked: player.horizontalSeek; onToggled: player.horizontalSeek = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "vinylCrackleToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Vinyl crackle"; glyphName: "volume"; checked: player.vinylCrackle; onToggled: player.vinylCrackle = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "vinylStaticToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Surface hiss"; glyphName: "volume"; checked: player.vinylStatic; onToggled: player.vinylStatic = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "vinylSkipsToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Occasional groove skips"; Accessible.description: "Occasionally jumps playback forward by one record revolution"; glyphName: "next"; checked: player.vinylSkips; onToggled: player.vinylSkips = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "miniPinToggle"; app: root; width: parent.width; text: "Keep Mini on top"; glyphName: "pin"; checked: player.miniOnTop; onToggled: player.miniOnTop = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        Column {
+                            width: parent.width; spacing: 4
+                            SpunText { x: 12; text: "Interface size"; color: root.mutedInk; font.pixelSize: SpunStyle.caption }
+                            Row {
+                                width: parent.width; spacing: 4
+                                Repeater {
+                                    model: [.85, 1, 1.15, 1.25, 1.5]
+                                    SpunButton {
+                                        required property real modelData
+                                        objectName: "uiScale" + Math.round(modelData*100)
+                                        width: (parent.width-16)/5; height: 40
+                                        text: Math.round(modelData*100)+"%"; tonal: Math.abs(typography.uiScale-modelData)<.001
+                                        Accessible.name: "Interface size " + text
+                                        Accessible.role: Accessible.RadioButton; Accessible.checked: tonal
+                                        onClicked: typography.uiScale=modelData
+                                        onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
+                                    }
+                                }
+                            }
+                        }
+                        PreferenceSwitch { objectName: "blurToggle"; app: root; width: parent.width; visible: native.supportsBlur; height: visible ? implicitHeight : 0; text: "Blur background"; glyphName: "blur"; checked: player.backgroundBlur; onToggled: player.backgroundBlur = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "cassetteSoundsToggle"; app: root; width: parent.width; visible: root.cassette; height: visible ? implicitHeight : 0; text: "Cassette sounds"; glyphName: "volume"; checked: player.cassetteSounds; onToggled: player.cassetteSounds = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "motionToggle"; app: root; width: parent.width; text: "Animations"; glyphName: "motion"; checked: player.motion; onToggled: player.motion = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        Rectangle { x: 12; width: parent.width - 24; height: 1; color: root.hairline }
+                        PreferenceSwitch { objectName: "rememberSessionToggle"; app: root; width: parent.width; text: "Remember Cider session"; glyphName: "queue"; checked: root.listeningService.rememberSession; enabled: !root.listeningService.busy; onToggled: root.listeningService.rememberSession = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "ciderAutoStartToggle"; app: root; width: parent.width; text: "Start Cider with Spun"; glyphName: "power"; checked: player.ciderAutoStart; onToggled: { player.ciderAutoStart = checked; if (checked && root.useCider) root.ciderService.ensureRunning() } onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "autoplayToggle"; app: root; width: parent.width; visible: root.useCider; height: visible ? implicitHeight : 0; text: "Autoplay"; glyphName: "autoplay"; checked: root.ciderService.autoplay; enabled: root.ciderService.modesReady && !root.ciderService.controlBusy; onToggled: root.ciderService.setAutoplay(checked); onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        MenuEntry { objectName: "crossfadeAction"; app: root; width: parent.width; visible: root.useCider; text: "Audio settings"; glyphName: "crossfade"; onTriggered: { preferences.close(); Qt.callLater(function() { crossfadeMenu.open() }) } onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                     }
-                    PreferenceSwitch { objectName: "horizontalSeekToggle"; app: root; width: parent.width; visible: !root.cassette; height: visible ? implicitHeight : 0; text: "Horizontal progress bar"; glyphName: "minus"; checked: player.horizontalSeek; onToggled: player.horizontalSeek = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "vinylCrackleToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Vinyl crackle"; glyphName: "volume"; checked: player.vinylCrackle; onToggled: player.vinylCrackle = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "vinylStaticToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Surface hiss"; glyphName: "volume"; checked: player.vinylStatic; onToggled: player.vinylStatic = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "vinylSkipsToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Occasional groove skips"; Accessible.description: "Occasionally jumps playback forward by one record revolution"; glyphName: "next"; checked: player.vinylSkips; onToggled: player.vinylSkips = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "miniPinToggle"; app: root; width: parent.width; text: "Keep Mini on top"; glyphName: "pin"; checked: player.miniOnTop; onToggled: player.miniOnTop = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "blurToggle"; app: root; width: parent.width; visible: native.supportsBlur; height: visible ? implicitHeight : 0; text: "Blur background"; glyphName: "blur"; checked: player.backgroundBlur; onToggled: player.backgroundBlur = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "cassetteSoundsToggle"; app: root; width: parent.width; visible: root.cassette; height: visible ? implicitHeight : 0; text: "Cassette sounds"; glyphName: "volume"; checked: player.cassetteSounds; onToggled: player.cassetteSounds = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "motionToggle"; app: root; width: parent.width; text: "Animations"; glyphName: "motion"; checked: player.motion; onToggled: player.motion = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    Rectangle { x: 12; width: parent.width - 24; height: 1; color: root.hairline }
-                    PreferenceSwitch { objectName: "rememberSessionToggle"; app: root; width: parent.width; text: "Remember Cider session"; glyphName: "queue"; checked: root.listeningService.rememberSession; enabled: !root.listeningService.busy; onToggled: root.listeningService.rememberSession = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "ciderAutoStartToggle"; app: root; width: parent.width; text: "Start Cider with Spun"; glyphName: "power"; checked: player.ciderAutoStart; onToggled: { player.ciderAutoStart = checked; if (checked && root.useCider) root.ciderService.ensureRunning() } onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    PreferenceSwitch { objectName: "autoplayToggle"; app: root; width: parent.width; visible: root.useCider; height: visible ? implicitHeight : 0; text: "Autoplay"; glyphName: "autoplay"; checked: root.ciderService.autoplay; enabled: root.ciderService.modesReady && !root.ciderService.controlBusy; onToggled: root.ciderService.setAutoplay(checked); onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
-                    MenuEntry { objectName: "crossfadeAction"; app: root; width: parent.width; visible: root.useCider; text: "Audio settings"; glyphName: "crossfade"; onTriggered: { preferences.close(); Qt.callLater(function() { crossfadeMenu.open() }) } onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                 }
             }
         }
@@ -1737,7 +1924,7 @@ ApplicationWindow {
         onLoaded: if (opening && preferences.visible) { opening = false; item.open() }
         Connections {
             target: fontPicker.item
-            function onClosed() { if (preferences.visible) fontChoice.forceActiveFocus() }
+            function onClosed() { if (preferences.visible && preferences.contentItem.item) preferences.contentItem.item.focusFont() }
         }
     }
 
@@ -1748,13 +1935,14 @@ ApplicationWindow {
         property var service: root.ciderService
         popupType: Popup.Item
         x: deck.x + deck.width - width; y: Math.max(12, deck.y - height - 10)
-        width: 320; height: Math.max(170, audioExtras.y + audioExtras.implicitHeight + 24); padding: 12
+        width: 320; height: contentItem.item ? contentItem.item.contentHeight : 170; padding: 12
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         onOpened: { service.refreshCrossfade(); service.refreshAudioOptions() }
 
-        contentItem: Item {
+        contentItem: Loader { active: crossfadeMenu.visible; sourceComponent: Item {
+            readonly property real contentHeight: Math.max(170, audioExtras.y + audioExtras.implicitHeight + 24)
             PreferenceSwitch {
                 app: root
                 objectName: "crossfadeToggle"
@@ -1822,7 +2010,7 @@ ApplicationWindow {
                 text: "Try again"; glyphName: "refresh"; enabled: !crossfadeMenu.service.crossfadeBusy
                 onTriggered: crossfadeMenu.service.refreshCrossfade()
             }
-        }
+        } }
     }
 
     Rectangle {
@@ -1832,14 +2020,66 @@ ApplicationWindow {
         SpunText { id: errorText; x: 14; y: 14; width: 310; text: root.deckPlayer.error; color: root.ink; font.pixelSize: SpunStyle.caption; wrapMode: Text.WordWrap }
         IconButton { x: 342; y: 7; glyphName: "close"; ink: root.mutedInk; tip: "Dismiss"; onClicked: root.deckPlayer.dismissError() }
     }
-    Rectangle {
-        x: 94; y: 110; width: 342; height: 514; radius: 22
-        visible: root.helpOpen; color: root.surface; border.width: 0
-        SpunText { x: 24; y: 23; text: "Shortcuts"; font.family: SpunStyle.family; font.pixelSize: 22; color: root.ink }
-        SpunText {
-            x: 24; y: 70; width: 294; color: root.mutedInk; font.pixelSize: 12; lineHeight: 1.55
-            text: "Space                  Play / pause\n← / →                 Seek 5 seconds\nCtrl + ← / →       Previous / next\n↑ / ↓                    Volume\nM                         Mute\nCtrl + O               Add music\nCtrl + L                Show queue\nCtrl + F                Search panel\nCtrl + K               Quick jump\nCtrl + M              Mini / full player\nCtrl + B              Browse Cider music\nCtrl + V              Open music link\nF                          Flip disc\nY                          Lyrics / album tracks\nCtrl / Shift + click    Select tracks\nCtrl + A / Space     Select all / toggle*\n*In a focused track list\n\nDouble-click to flip. Drag to move.\nScrub the outer rim to seek."
-        }
-        IconButton { x: 299; y: 8; glyphName: "close"; tip: "Close shortcuts"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.helpOpen=false }
+    Popup {
+        id: shortcutsPopup; objectName: "shortcutsPopup"
+        parent: Overlay.overlay; popupType: Popup.Item
+        x: (root.layoutWidth - width) / 2; y: (root.layoutHeight - height) / 2
+        width: Math.min(440, root.layoutWidth - 24); height: Math.min(650, root.layoutHeight - 24)
+        padding: SpunStyle.outerInset; modal: true; dim: false; focus: true
+        visible: root.helpOpen
+        onOpened: if (contentItem.item) contentItem.item.focusClose()
+        onClosed: { root.helpOpen = false; if (!root.miniMode) menuButton.forceActiveFocus(Qt.BacktabFocusReason) }
+        background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.dialogRadius }
+        enter: SpunPopupEnter {}
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+        contentItem: Loader { active: shortcutsPopup.visible; sourceComponent: Item {
+            Accessible.role: Accessible.Dialog; Accessible.name: "Keyboard shortcuts"
+            function focusClose() { shortcutsClose.forceActiveFocus(Qt.TabFocusReason) }
+            SpunText { text: "Keyboard shortcuts"; color: root.ink; font.pixelSize: SpunStyle.heading; font.weight: Font.Medium }
+            IconButton { id: shortcutsClose; objectName: "shortcutsClose"; anchors.right: parent.right; y: -8; glyphName: "close"; tip: "Close · Esc"; ink: root.mutedInk; onClicked: shortcutsPopup.close() }
+            Flickable {
+                id: shortcutScroll; objectName: "shortcutScroll"
+                y: 48; width: parent.width; height: parent.height - y
+                contentHeight: shortcutRows.implicitHeight; clip: true; boundsBehavior: Flickable.StopAtBounds
+                activeFocusOnTab: true; Accessible.name: "Keyboard shortcuts"
+                function scrollBy(amount) { contentY = Math.max(0, Math.min(Math.max(0, contentHeight - height), contentY + amount)) }
+                Keys.onDownPressed: scrollBy(24)
+                Keys.onUpPressed: scrollBy(-24)
+                Keys.onPressed: event => {
+                    if (event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp) {
+                        scrollBy(event.key === Qt.Key_PageDown ? height : -height); event.accepted = true
+                    }
+                }
+                ScrollBar.vertical: ScrollBar {}
+                Column {
+                    id: shortcutRows; width: parent.width; spacing: SpunStyle.smallGap
+                    Repeater {
+                        model: [
+                            ["Space", "Play / pause"], ["← / →", "Seek 5 seconds"], ["Shift + drag", "Fine seeking"],
+                            ["Ctrl + ← / →", "Previous / next"], ["↑ / ↓", "Volume"], ["M", "Mute"],
+                            ["Ctrl + O", "Add music"], ["Ctrl + Shift + O", "Add album folder"],
+                            ["Ctrl + L", "Show queue"], ["Ctrl + F", "Search panel"], ["Ctrl + K", "Quick jump"],
+                            ["Ctrl + M", "Mini / full player"], ["Ctrl + B", "Browse Cider music"],
+                            ["Ctrl + V", "Open music link"], ["F", "Flip disc"], ["Y", "Lyrics / album tracks"],
+                            ["Ctrl / Shift + click", "Select tracks"], ["Ctrl + A / Space", "Select all / toggle*"],
+                            ["Esc", "Back / close"], ["F1", "Keyboard shortcuts"]
+                        ]
+                        Item {
+                            required property var modelData
+                            width: shortcutRows.width; height: Math.max(20, shortcutKey.implicitHeight, shortcutAction.implicitHeight)
+                            SpunText { id: shortcutKey; objectName: "shortcutKey"; width: parent.width * .46; text: modelData[0]; color: root.mutedInk; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap }
+                            SpunText { id: shortcutAction; objectName: "shortcutAction"; x: parent.width * .46 + 12; width: parent.width - x - 8; text: modelData[1]; color: root.ink; font.pixelSize: SpunStyle.body; wrapMode: Text.WordWrap }
+                        }
+                    }
+                    SpunText { width: parent.width - 8; text: "*In a focused Cider track list"; color: root.mutedInk; font.pixelSize: SpunStyle.caption; wrapMode: Text.WordWrap }
+                    Item { width: 1; height: SpunStyle.gap }
+                    SpunText {
+                        width: parent.width - 8; color: root.mutedInk; font.pixelSize: SpunStyle.caption; wrapMode: Text.WordWrap
+                        text: "Double-click to flip. Drag empty space to move.\n" + (root.cassette ? "Drag the progress bar to seek." : root.vinyl ? "Drag the needle or outer rim to seek." : "Drag the outer rim to seek.")
+                    }
+                }
+            }
+            Rectangle { anchors.fill: shortcutScroll; anchors.margins: -4; radius: SpunStyle.rowRadius; color: "transparent"; border.width: shortcutScroll.activeFocus ? 1.5 : 0; border.color: root.accent }
+        } }
     }
 }

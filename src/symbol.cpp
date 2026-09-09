@@ -11,22 +11,29 @@ void Symbol::setName(const QString &name) {
     if (name == m_name) return;
     // The cache can contain only the finite, bundled symbol set. SVGs are parsed
     // once, independently of theme, scale, hover feedback, and delegate recycling.
-    static QHash<QString, QSharedPointer<QSvgRenderer>> cache;
+    struct CachedSymbol { QSharedPointer<QSvgRenderer> renderer; QRectF bounds; };
+    static QHash<QString, CachedSymbol> cache;
     auto key = name;
-    QFile file(QStringLiteral(":/assets/icons/") + key + QStringLiteral(".svg"));
-    if (key.contains('/') || !file.open(QIODevice::ReadOnly)) {
-        key = QStringLiteral("disc");
-        file.setFileName(QStringLiteral(":/assets/icons/disc.svg"));
-        file.open(QIODevice::ReadOnly);
+    auto found = cache.constFind(key);
+    if (found == cache.cend()) {
+        QFile file(QStringLiteral(":/assets/icons/") + key + QStringLiteral(".svg"));
+        if (key.contains('/') || !file.open(QIODevice::ReadOnly)) {
+            key = QStringLiteral("disc");
+            file.setFileName(QStringLiteral(":/assets/icons/disc.svg"));
+            file.open(QIODevice::ReadOnly);
+        }
+        found = cache.constFind(key);
+        if (found == cache.cend()) {
+            auto data = file.readAll();
+            // A render-only id lets Qt measure the original path's visible bounds.
+            data.replace("<path ", "<path id=\"symbol\" ");
+            auto renderer = QSharedPointer<QSvgRenderer>::create(data);
+            const auto bounds = renderer->boundsOnElement(QStringLiteral("symbol"));
+            found = cache.insert(key, {renderer, bounds});
+        }
     }
-    if (!cache.contains(key)) {
-        auto data = file.readAll();
-        // A render-only id lets Qt measure the original path's visible bounds.
-        data.replace("<path ", "<path id=\"symbol\" ");
-        cache.insert(key, QSharedPointer<QSvgRenderer>::create(data));
-    }
-    m_svg = cache.value(key);
-    m_bounds = m_svg->boundsOnElement(QStringLiteral("symbol"));
+    m_svg = found->renderer;
+    m_bounds = found->bounds;
     m_name = name;
     emit nameChanged();
     update();

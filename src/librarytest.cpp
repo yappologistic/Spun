@@ -696,12 +696,19 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     click("playNextAction");check(wait([&]{return !actions.busy();})&&editPath.endsWith("/add-next")&&plays==beforeUi,"Play Next menu dispatches a queue addition only");
     click("libraryActions3");testKeyClick(window,Qt::Key_Escape);QTest::qWait(100);
     check(wait([&]{return !panel->property("actionsOpen").toBool();})&&window->property("libraryOpen").toBool(),"Escape dismisses the track menu before closing the browser");
+    openingPlayer->setMotion(true);
     click("libraryRow3");wait([&]{return !browser.busy();});
     check(!browser.collection().isEmpty()&&plays==beforeUi,"album row opens its track list without autoplay");
     if(!captures.isEmpty())window->grabWindow().save(captures+"/06-library-album.png");
     click("libraryPlayCollection");check(wait([&]{return !browser.starting();})&&plays==beforeUi+1,"collection Play button dispatches playback");
     testKeyClick(window,Qt::Key_Escape);check(browser.collection().isEmpty(),"Escape returns from collection detail");QTest::qWait(100);
     check(qAbs(list->property("contentY").toDouble()-120)<1,"Back restores the library scroll position");
+    check(list->property("currentIndex").toInt()==3&&list->hasActiveFocus(),"Back restores keyboard focus to the album that opened the collection");
+    auto *listMotion=window->findChild<QObject *>("libraryListEntrance");
+    check(listMotion&&listMotion->property("startOffset").toReal()==-12,"Back uses the return direction for the library transition");
+    QTest::qWait(200);
+    if(!captures.isEmpty())window->grabWindow().save(captures+"/24-library-return-focus.png");
+    openingPlayer->setMotion(openingMotion);
     click("libraryTab_search");click("librarySearchInput");
     auto *search=find(window->contentItem(),"librarySearchInput");
     check(search && search->hasActiveFocus(),"browser search receives keyboard focus");
@@ -761,6 +768,13 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
         if(duration) { duration->forceActiveFocus();testKeyClick(window,Qt::Key_Right); }
         check(wait([&]{return !cider.crossfadeBusy();})&&fadeSeconds==9,"keyboard adjusts crossfade duration and confirms it");
         testKeyClick(window,Qt::Key_Escape);check(wait([&]{return !fadeMenu->property("visible").toBool();}),"Escape dismisses crossfade settings");
+        check(!window->findChild<QObject *>("crossfadeToggle"), "closed audio popup releases its controls");
+        QMetaObject::invokeMethod(fadeMenu,"open");
+        check(wait([&]{return fadeMenu->property("opened").toBool()&&!cider.crossfadeBusy()&&!cider.audioBusy();}), "audio popup reopens and reloads confirmed state");
+        auto *reopenedToggle=window->findChild<QObject *>("crossfadeToggle");
+        check(reopenedToggle&&reopenedToggle->property("checked").toBool()==cider.crossfade(), "recreated audio controls retain the confirmed Cider value");
+        QMetaObject::invokeMethod(fadeMenu,"close");
+        wait([&]{return !fadeMenu->property("visible").toBool();});
         fadeMenu->setProperty("service",originalFade);
     }
     click("libraryTab_songs");wait([&]{return !browser.busy();});click("recentSongsTab");wait([&]{return !browser.busy();});

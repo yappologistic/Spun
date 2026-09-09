@@ -3,6 +3,26 @@
 #include <QImage>
 #include <QTimer>
 
+// A static view of the already decoded cover; no additional fetch or image cache.
+class ArtworkView : public QQuickPaintedItem {
+    Q_OBJECT
+    Q_PROPERTY(QImage artwork READ artwork WRITE setArtwork NOTIFY artworkChanged)
+public:
+    Q_PROPERTY(bool hasArtwork READ hasArtwork NOTIFY artworkChanged)
+    explicit ArtworkView(QQuickItem *parent=nullptr):QQuickPaintedItem(parent) {}
+    bool hasArtwork() const { return !m_artwork.isNull(); }
+    QImage artwork() const { return m_artwork; }
+    void setArtwork(const QImage &image) {
+        if(image.cacheKey()==m_artwork.cacheKey())return;
+        m_artwork=image;update();emit artworkChanged();
+    }
+    void paint(QPainter *painter) override;
+signals:
+    void artworkChanged();
+private:
+    QImage m_artwork;
+};
+
 class Disc : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(bool vinyl READ vinyl WRITE setVinyl NOTIFY vinylChanged)

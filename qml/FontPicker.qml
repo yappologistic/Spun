@@ -9,8 +9,8 @@ Popup {
     popupType: Popup.Item
     focus: true
     modal: true; dim: false
-    width: Math.min(352, app.width - 24)
-    height: Math.min(Math.max(424, preferences.height), app.height - 24)
+    width: Math.min(352, (app.layoutWidth || app.width) - 24)
+    height: Math.min(Math.max(424, preferences.height), (app.layoutHeight || app.height) - 24)
     padding: 12
     parent: app.contentItem
     x: Math.max(12, preferences.x)

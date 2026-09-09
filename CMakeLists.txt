@@ -76,7 +76,7 @@ function(spun_application target)
         set(asset_compression --compress-algo zlib --compress 9 --threshold 0)
     endif()
     qt_add_resources(${target} "${target}_assets" PREFIX "/"
-        FILES ${SPUN_SYMBOLS} assets/spun.svg licenses/MaterialSymbols-LICENSE.txt
+        FILES ${SPUN_SYMBOLS} assets/spun-window.png licenses/MaterialSymbols-LICENSE.txt
         OPTIONS ${asset_compression})
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE "$<$<CONFIG:Release>:${SPUN_SIZE_OPTIMIZATION};-ffunction-sections;-fdata-sections>")
