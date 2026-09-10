@@ -18,6 +18,24 @@ private:
     float m_radius=176,m_hole=3,m_depth=2;
     bool m_grooves=false;
 };
+class ReelGeometry : public QQuick3DGeometry {
+    Q_OBJECT
+public:
+    explicit ReelGeometry(QQuick3DObject *parent=nullptr);
+};
+
+class TurntableDetailGeometry : public QQuick3DGeometry {
+    Q_OBJECT
+    Q_PROPERTY(bool fascia MEMBER m_fascia NOTIFY shapeChanged)
+public:
+    explicit TurntableDetailGeometry(QQuick3DObject *parent=nullptr);
+signals:
+    void shapeChanged();
+private:
+    void rebuild();
+    bool m_fascia=false;
+};
+
 class CoverTexture : public QObject {
     Q_OBJECT
     Q_PROPERTY(QQuick3DTextureData *texture READ texture NOTIFY textureChanged)

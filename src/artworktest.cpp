@@ -2,6 +2,7 @@
 #include "player.h"
 #include "cider.h"
 #include "disc.h"
+#include "recorder.h"
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QQuickItem>
@@ -67,6 +68,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
     const auto publish=[&](const QString &id,const QString &file,const QString &album="Remote album") {remote.track(id,file.isEmpty()?QUrl():QUrl::fromLocalFile(file),album);};
     const auto inspect=[&](QColor color,bool threeD) {
         if(!wait([&]{return colorIs(presenter->artwork(),color);}))return false;
+        if(!threeD&&player.medium()=="tp7"){auto *face=window->findChild<RecorderSurface*>("recorderWheelSurface");return face&&colorIs(face->property("artwork").value<QImage>(),color);}
         if(!threeD){auto *disc=window->findChild<Disc*>("discFace");return disc&&colorIs(disc->artwork(),color);}
 #ifdef SPUN_WITH_3D
         auto *view=window->findChild<QObject*>("player3DView");
@@ -85,7 +87,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
 #endif
     };
     QList<bool> modes{false};if(qmlContext(window)->contextProperty("supports3D").toBool())modes.append(true);
-    for(bool threeD:modes)for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette")}) {
+    for(bool threeD:modes)for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette"),QString("tp7")}) {
         context=medium+(threeD?" 3D":" 2D");player.setMedium(medium);player.setThreeD(threeD);QTest::qWait(80);
         window->setProperty("useCider",false);player.setCover(QUrl::fromLocalFile(temp+"/art-green.png"));
         check(wait([&]{return !player.artworkLoading();})&&inspect(Qt::green,threeD),"local artwork reaches the active medium");
@@ -114,7 +116,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         const bool tape=player.medium()=="cassette";
         QVariant projected;
         QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,projected),
-            Q_ARG(QVariant,tape?128.:player.medium()=="cd"?345.:285.),Q_ARG(QVariant,tape?203.:294.));
+            Q_ARG(QVariant,tape?128.:player.medium()=="cd"?345.:player.medium()=="tp7"?276.:285.),Q_ARG(QVariant,tape?203.:player.medium()=="tp7"?249.:294.));
         const QPointF position=view->mapToScene(projected.toPointF());
         const QImage frame=window->grabWindow();
         if(frame.isNull())return false;
@@ -132,7 +134,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         if(!captures.isEmpty()){QDir().mkpath(captures);frame.save(captures+"/render-"+name+".png");}
         return total>0&&matches>total*.7;
     };
-    for(const QString &medium:{QString("vinyl"),QString("cd"),QString("cassette")}) {
+    for(const QString &medium:{QString("vinyl"),QString("cd"),QString("cassette"),QString("tp7")}) {
         context=medium+" rendered artwork";
         player.setThreeD(false);player.setMedium(medium);player.setMotion(false);
         publish("render-start",temp+"/art-red.png","First render album");
@@ -150,7 +152,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         check(originalView&&originalView==window->findChild<QObject*>("player3DView"),"artwork refresh preserves the active 3D scene");
         player.setMotion(false);
     }
-    for(const QString &origin:{QString("cd"),QString("cassette")}) {
+    for(const QString &origin:{QString("cd"),QString("cassette"),QString("tp7")}) {
         context=origin+" to vinyl";
         player.setMedium(origin);publish("switch-start",temp+"/art-red.png");
         check(inspect(Qt::red,true),"cover loads before switching medium");
@@ -205,7 +207,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         {"name",id},{"albumName","Album"},{"artistName","Remote artist"},
         {"playParams",QJsonObject{{"id","library-"+id},{"catalogId",id}}},
         {"artwork",QJsonObject{{"url",cover}}}};};
-    for(bool threeD:modes)for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette")}) {
+    for(bool threeD:modes)for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette"),QString("tp7")}) {
         context=medium+(threeD?" paired 3D":" paired 2D");player.setMedium(medium);player.setThreeD(threeD);QTest::qWait(60);
         apiCurrent=current("album-a",base+"/slow");paired.track("album-a",QUrl(base+"/slow"),"Album A");
         check(inspect(Qt::red,threeD),"paired artwork uses the API's matching catalog identity");

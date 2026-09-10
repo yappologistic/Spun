@@ -14,11 +14,14 @@
 #include "mediauitest.h"
 #include "artworktest.h"
 #include "threedtest.h"
+#include "recordertest.h"
+#include "turntabletest.h"
 #include "testinput.h"
 #endif
 #include "lyrics.h"
 #include "artwork.h"
 #include "disc.h"
+#include "recorder.h"
 #include "playerbody.h"
 #include "symbol.h"
 #include "mpris.h"
@@ -125,6 +128,7 @@ public:
         if (!window) return;
         const bool mini = window->property("miniMode").toBool();
         const bool cassette=window->property("cassette").toBool();
+        const bool recorder=window->property("recorder").toBool();
         const int targetWidth = mini ? 300 : queue ? 860 : 530;
         const int targetHeight = window->property("layoutHeight").toInt();
         const qreal scale=qBound(.5,window->property("uiScale").toDouble(),1.5);
@@ -149,13 +153,13 @@ public:
         }
         if (mini && window->property("menuOpen").toBool()) { setMask(QRegion(0,0,targetWidth,targetHeight));return; }
         if (mini) {
-            QRegion region=cassette?QRegion(18,60,264,176):QRegion(6,6,288,288,QRegion::Ellipse);
+            QRegion region=recorder?QRegion(38,15,205,267):cassette?QRegion(18,60,264,176):QRegion(6,6,288,288,QRegion::Ellipse);
             if(cassette)region|=QRegion(50,240,200,26);
             if (window->property("backgroundBlur").toBool()) {
                 QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0,0,300,targetHeight),21,21);
                 region=QRegion(backdrop.toFillPolygon().toPolygon());
             }
-            else if(!cassette)region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
+            else if(!cassette&&!recorder)region-=window->property("vinyl").toBool()?QRegion(146,146,8,8,QRegion::Ellipse):QRegion(136,136,28,28,QRegion::Ellipse);
             region |= QRegion(50,268,200,targetHeight-270);
             if (auto *notice=window->findChild<QQuickItem *>("actionNotice"); notice && notice->isVisible())
                 region |= itemRegion(notice);
@@ -174,6 +178,7 @@ public:
         if(body) {
             QPainterPath housing;
             if(window->property("discFlipped").toBool())housing.addRoundedRect(QRectF(87,104,357,387),5,5);
+            else if(recorder)housing.addRoundedRect(QRectF(95,85,321,420),12,12);
             else if(cassette)housing.addRoundedRect(QRectF(58,151,414,295),28,28);
             else housing.addRoundedRect(QRectF(45,74,440,440),window->property("vinyl").toBool()?28:220,window->property("vinyl").toBool()?28:220);
             region=QRegion(housing.toFillPolygon().toPolygon());
@@ -181,7 +186,7 @@ public:
             if(window->property("swapRunning").toBool())region|=QRegion(45,74,440,440);
         }
         if(window->property("threeDActive").toBool())region=QRegion(12,62,506,460);
-        if(!cassette && !body && !window->property("threeDActive").toBool())region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
+        if(!cassette && !recorder && !body && !window->property("threeDActive").toBool())region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
             region |= itemRegion(bar);
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
@@ -1516,7 +1521,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--self-test" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--self-test" || option == "--test-turntable" || option == "--test-recorder" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1552,6 +1557,8 @@ int main(int argc, char **argv) {
     parser.addOption({"test-3d-lighting", "Verify live palette changes in rendered 3D pixels"});
     parser.addOption({"test-3d-ui", "Run isolated native 3D interaction and lifecycle checks"});
     parser.addOption({"test-3d-library", "Run isolated library checks with 3D enabled"});
+    parser.addOption({"test-turntable", "Verify 3D turntable hardware, motion and seeking"});
+    parser.addOption({"test-recorder", "Verify recorder playback, controls, seeking and renderer combinations"});
     parser.addOption({"test-media-ui", "Run isolated vinyl and cassette interaction checks"});
     parser.addOption({"test-import-ui", "Run isolated folder import UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
@@ -1565,7 +1572,7 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("test-turntable") || parser.isSet("test-recorder") || parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
     if(test && qEnvironmentVariableIsSet("SPUN_TEST_SCREEN"))app.setDesktopFileName("spun-diagnostics");
     if (!test && !parser.isSet("config")) {
         auto bus = QDBusConnection::sessionBus();
@@ -1614,12 +1621,15 @@ int main(int argc, char **argv) {
 #ifdef SPUN_WITH_3D
     qmlRegisterType<DeckGeometry>("Spun",1,0,"DeckGeometry");
     qmlRegisterType<RecordGeometry>("Spun",1,0,"RecordGeometry");
+    qmlRegisterType<ReelGeometry>("Spun",1,0,"ReelGeometry");
+    qmlRegisterType<TurntableDetailGeometry>("Spun",1,0,"TurntableDetailGeometry");
     qmlRegisterType<CoverTexture>("Spun",1,0,"CoverTexture");
     qmlRegisterType<SurfaceTexture>("Spun",1,0,"SurfaceTexture");
     qmlRegisterType<StudioTexture>("Spun",1,0,"StudioTexture");
     qmlRegisterType<WaveGeometry>("Spun",1,0,"WaveGeometry");
 #endif
     qmlRegisterType<PlayerBody>("Spun",1,0,"PlayerBody");
+    qmlRegisterType<RecorderSurface>("Spun",1,0,"RecorderSurface");
     qmlRegisterType<Disc>("Spun", 1, 0, "Disc");
     qmlRegisterType<ArtworkView>("Spun", 1, 0, "ArtworkView");
     qmlRegisterType<ProgressRing>("Spun", 1, 0, "ProgressRing");
@@ -1649,7 +1659,7 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("testMode", test);
     const auto benchmarkMedium = parser.value("benchmark-medium");
     if (parser.isSet("benchmark")) {
-        if (!QStringList{"cd","vinyl","cassette"}.contains(benchmarkMedium)) return 2;
+        if (!QStringList{"cd","vinyl","cassette","tp7"}.contains(benchmarkMedium)) return 2;
         player.setMedium(benchmarkMedium);
     }
     QList<double> frameIntervals;
@@ -2070,6 +2080,8 @@ int main(int argc, char **argv) {
         std::cout << "RESULT " << failures << " failures" << std::endl;
         app.exit(failures ? 1 : 0);
     });
+    else if (parser.isSet("test-turntable")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseTurntable(player,window,temp.path(),parser.value("capture-dir"))); });
+    else if (parser.isSet("test-recorder")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseRecorder(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-artwork")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseArtwork(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-lighting")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeDLighting(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeD(player,window,temp.path(),parser.value("capture-dir"))); });

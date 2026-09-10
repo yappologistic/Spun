@@ -40,7 +40,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_repeat = qBound(0, m_settings.value("repeat", 0).toInt(), 2);
     m_light = m_settings.value("light", false).toBool();
     m_medium=m_settings.value("medium",m_settings.value("vinyl",false).toBool()?"vinyl":"cd").toString();
-    if(!QStringList{"cd","vinyl","cassette"}.contains(m_medium))m_medium="cd";
+    if(!QStringList{"cd","vinyl","cassette","tp7"}.contains(m_medium))m_medium="cd";
     m_threeD=m_settings.value("threeD",false).toBool();
     m_cd500Rpm=m_settings.value("cd500Rpm",false).toBool();
     m_vinylSpeed=m_settings.value("vinylSpeed",33).toInt();
@@ -473,7 +473,7 @@ void Player::setMiniMode(bool value) { if (m_miniMode == value) return; m_miniMo
 void Player::setBackgroundBlur(bool value) { if (m_backgroundBlur == value) return; m_backgroundBlur = value; emit backgroundBlurChanged(); save(); }
 void Player::setVinyl(bool value) { setMedium(value?"vinyl":"cd"); }
 void Player::setMedium(const QString &value) {
-    if(m_medium==value || !QStringList{"cd","vinyl","cassette"}.contains(value))return;
+    if(m_medium==value || !QStringList{"cd","vinyl","cassette","tp7"}.contains(value))return;
     const bool wasVinyl=vinyl();m_medium=value;emit mediumChanged();if(wasVinyl!=vinyl())emit vinylChanged();save();
 }
 void Player::setShowPlayerBody(bool value) { if(value==m_showPlayerBody)return;m_showPlayerBody=value;emit settingsChanged();save(); }

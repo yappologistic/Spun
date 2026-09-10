@@ -22,7 +22,7 @@
   <a href="#license">License</a>
 </p>
 
-Play local music or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record or cassette, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
+Play local music or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record, cassette or TP-7-inspired recorder, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
 
 **Source-available · PolyForm Noncommercial 1.0.0.** Personal and other permitted noncommercial use is free. This is not an OSI-approved open-source license. [Read the license details](#license).
 
@@ -68,18 +68,19 @@ Spun connects to the local API on port 10767. Basic playback controls use Linux'
 
 ## Inside the player
 
-### CD, vinyl and cassette
+### CD, vinyl, cassette and TP-7
 
-Choose a medium in **More → Preferences**. All three share playback controls, album details, lyrics and Mini mode.
+Choose a medium in **More → Preferences**. All four share playback controls, album details, lyrics and Mini mode.
 
 - **CD:** album artwork on the disc, with gentle rotation or an optional **500 RPM** setting. This changes the visual speed only.
-- **Vinyl:** a record with grooves, a gold tonearm and Relaxed, 33⅓ or 45 RPM rotation. Drag the needle to seek and play. Optional effects include crackle, hiss and groove skips.
+- **Vinyl:** a record with grooves and Relaxed, 33⅓ or 45 RPM rotation. Drag the needle to seek and play. The 3D turntable has a hinged dust cover, working speed buttons and a cue lever that lifts or lowers the needle to pause or play. Drag its housing to rotate it; double-click to reset the angle. Optional effects include crackle, hiss and groove skips.
 - **Cassette:** Clear, Smoke and Cream finishes, moving tape reels and optional transport sounds. Reels turn counterclockwise during forward playback and reverse while rewinding.
+- **TP-7:** a metal recorder with a draggable wheel, track display and working transport, rocker and volume controls. In 3D, drag the body to rotate it horizontally or tilt it vertically; double-click to reset the angle. The lower keys are Previous, Play/Pause and Next. The rocker seeks ten seconds, and the knob controls volume. The side keys open album details, the queue and the player menu. This is a playback appearance, without microphone recording.
 - **Player bodies:** **Show player body** adds a turntable, portable cassette player or CD tray with a clear lid. Album changes exchange the medium with a brief sleeve or case animation. Tracks on the same album keep it in place, and playback starts immediately.
 - **3D:** enable **3D player** for modeled discs, reels, cases and tonearm parts, with metallic surfaces and lighting tinted by Noctalia's current palette. Playback controls stay in their familiar positions. Mini mode remains compact, and reverse-side details stay flat for reading.
 - **Seeking:** use the disc rim, vinyl needle or optional horizontal progress bar. Their previews stay in sync. Hold **Shift** for finer adjustments and **Esc** to cancel a drag.
-- **Albums as records:** enable **Play albums as records** in Vinyl preferences to give each album track a groove band. A needle drop selects the song and position. Local mode uses loaded album tracks in track-number order; Cider starts the album and verifies the track before seeking. Missing durations or unavailable tracks fall back to single-song seeking. The horizontal bar always seeks within the current song.
-- **Reverse view:** double-click the medium or press **F** for album details and tracks. Press **Y** for lyrics when available. Local lyrics can come from matching `.lrc` or `.txt` files or embedded metadata. **View artwork** opens the full cover.
+- **Albums as records:** enable **Play albums as records** in Vinyl preferences to give each album track a groove band. A needle drop selects the song and position. Local mode uses loaded album tracks in track-number order; Cider starts the album and verifies the track before seeking. Missing durations or unavailable tracks fall back to single-song seeking. The circular and horizontal bars share the album timeline, so either can select a track and position.
+- **Reverse view:** press **F** for album details and tracks. The disc and cassette also support double-clicking to flip. Press **Y** for lyrics when available. Local lyrics can come from matching `.lrc` or `.txt` files or embedded metadata. **View artwork** opens the full cover.
 - **Mini mode:** a compact player with controls below the medium and an optional always-on-top setting. Hover or focus Next to preview the upcoming song when known.
 
 ### Browse through Cider
@@ -187,13 +188,13 @@ ctest --test-dir build --output-on-failure
 
 Tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. Desktop-control tests use a private D-Bus session. Diagnostics are separate from the normal player.
 
-For focused artwork, lighting, geometry and media checks:
+For focused player, artwork, lighting, geometry and media checks:
 
 ```bash
 ./scripts/test-3d.sh
 ```
 
-The default uses offscreen CPU rendering through Mesa and requires an available X display for its OpenGL context. It does not create visible windows. It checks rendered artwork and palette changes without exercising the full native window lifecycle.
+The default uses offscreen CPU rendering through Mesa and requires an available X display for its OpenGL context. It does not create visible windows. It checks recorder and turntable controls, physical rotation, seeking, rendered artwork and palette changes without exercising the full native window lifecycle.
 
 For the complete 3D interaction and Cider-fixture suites, run `SPUN_TEST_RENDERER=native ./scripts/test-3d.sh` in a separate Wayland or X11 test session. This includes projected seeking, tonearm gestures, lid transitions, scaling and mode combinations. Set `SPUN_TEST_SCREEN` to the dedicated output name and `SPUN_TEST_OUTPUT` to a local capture directory. Missing 3D rendering fails the checks instead of silently skipping them.
 

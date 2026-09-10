@@ -59,8 +59,8 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,point);
         check(!previewArm->property("landing").toBool(),"new seek preview supersedes a pending needle landing");
         const double trackFraction=horizontal->property("previewValue").toDouble();
-        check(std::abs(window->property("recordVisualProgress").toDouble()-trackFraction/3)<.01,"horizontal preview maps the current song into the album timeline");
-        check(std::abs(previewArm->property("armAngle").toDouble()-(6+20*trackFraction/3))<.3,"paused album tonearm follows the horizontal preview immediately");
+        check(std::abs(window->property("recordVisualProgress").toDouble()-trackFraction)<.01,"horizontal preview matches the whole album timeline");
+        check(std::abs(previewArm->property("armAngle").toDouble()-(6+20*trackFraction))<.3,"paused album tonearm follows the horizontal preview immediately");
         QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,point);
         const auto ringStart=albumRim->mapToScene(QPointF(436,220)).toPoint(),ringEnd=albumRim->mapToScene(QPointF(220,436)).toPoint();
         QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,ringStart);
