@@ -23,6 +23,7 @@ struct ImportedTracks { QList<Track> tracks; QString firstPath; };
 class Player : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
+    Q_PROPERTY(bool threeD READ threeD WRITE setThreeD NOTIFY settingsChanged)
     Q_PROPERTY(bool cd500Rpm READ cd500Rpm WRITE setCd500Rpm NOTIFY settingsChanged)
     Q_PROPERTY(int vinylSpeed READ vinylSpeed WRITE setVinylSpeed NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylAlbumMode READ vinylAlbumMode WRITE setVinylAlbumMode NOTIFY settingsChanged)
@@ -65,6 +66,8 @@ public:
     explicit Player(const QString &settingsPath, QObject *parent = nullptr);
     ~Player() override;
     QString trackKey() const { return currentUrl().toString(); }
+    bool threeD() const { return m_threeD; }
+    void setThreeD(bool value);
     bool cd500Rpm() const { return m_cd500Rpm; }
     void setCd500Rpm(bool value);
     int vinylSpeed() const { return m_vinylSpeed; }
@@ -191,6 +194,7 @@ private:
     QSet<QString> m_shuffleVisited;
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
+    bool m_threeD=false;
     bool m_cd500Rpm=false;
     int m_vinylSpeed=33;
     bool m_vinylAlbumMode=false;

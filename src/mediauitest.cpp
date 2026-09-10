@@ -24,11 +24,18 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         for(auto *child:parent->childItems())if(auto *result=find(child,name))return result;
         return nullptr;
     };
-    auto item=[&](const QString &name){return find(window->contentItem(),name);};
+    auto item=[&](const QString &name){auto *result=find(window->contentItem(),name);return result ? result : window->findChild<QQuickItem*>(name);};
     auto capture=[&](const QString &name){
         if(captures.isEmpty())return;
         if(!window->isExposed()){std::cout<<"SKIP capture on hidden native workspace"<<std::endl;return;}
         QDir().mkpath(captures);
+        if(window->property("threeDActive").toBool()) {
+            const auto frame=window->grabWindow();
+            int pixels=0;
+            for(int y=100;y<qMin(510,frame.height());y+=3)for(int x=40;x<qMin(490,frame.width());x+=3)if(qAlpha(frame.pixel(x,y))>128)++pixels;
+            check(pixels>3000,"3D frame contains rendered physical geometry");
+            check(!frame.isNull()&&frame.save(captures+"/"+name+".png"),"media capture saved");return;
+        }
         auto grab=window->contentItem()->grabToImage();
         check(grab&&wait([&]{return !grab->image().isNull();})&&grab->image().save(captures+"/"+name+".png"),"media capture saved");
     };
@@ -44,6 +51,25 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
     player.addUrls(files,false);check(wait([&]{return !player.busy();})&&player.count()==3,"album fixture imports three tracks");
     player.setVinyl(true);player.setVinylAlbumMode(true);QTest::qWait(350);
     check(!window->property("recordKey").toString().isEmpty(),"album grooves expose a stable gesture identity");
+    player.setHorizontalSeek(true);QTest::qWait(100);
+    auto *horizontal=item("horizontalSeek"),*albumRim=item("scrubber"),*previewArm=item("vinylTonearm");
+    if(horizontal&&albumRim&&previewArm) {
+        previewArm->setProperty("landingProgress",.05);previewArm->setProperty("landing",true);
+        const auto point=horizontal->mapToScene(QPointF(horizontal->width()*.6,horizontal->height()/2)).toPoint();
+        QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,point);
+        check(!previewArm->property("landing").toBool(),"new seek preview supersedes a pending needle landing");
+        const double trackFraction=horizontal->property("previewValue").toDouble();
+        check(std::abs(window->property("recordVisualProgress").toDouble()-trackFraction/3)<.01,"horizontal preview maps the current song into the album timeline");
+        check(std::abs(previewArm->property("armAngle").toDouble()-(6+20*trackFraction/3))<.3,"paused album tonearm follows the horizontal preview immediately");
+        QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,point);
+        const auto ringStart=albumRim->mapToScene(QPointF(436,220)).toPoint(),ringEnd=albumRim->mapToScene(QPointF(220,436)).toPoint();
+        QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,ringStart);
+        QMouseEvent move(QEvent::MouseMove,ringEnd,window->mapToGlobal(ringEnd),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);QGuiApplication::sendEvent(window,&move);
+        check(albumRim->property("scrubbing").toBool()&&std::abs(window->property("recordVisualProgress").toDouble()-.5)<.01,"album ring retains an actual pointer drag");
+        check(std::abs(horizontal->property("value").toDouble()-.5)<.01&&std::abs(previewArm->property("armAngle").toDouble()-16)<.3,"album ring preview synchronizes the next song position and tonearm");
+        QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,ringEnd);
+    } else check(false,"shared album seeking controls exist");
+    player.pause();player.select(0,false);player.seek(0);player.setHorizontalSeek(false);QTest::qWait(100);
     auto *arm=item("vinylTonearm"),*shaft=item("tonearmShaft");
     check(arm&&shaft&&item("albumGrooves"),"album needle and groove boundaries are visible");
     if(arm&&shaft){
@@ -166,5 +192,90 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         if(palette.open(QIODevice::WriteOnly|QIODevice::Truncate)){palette.write(original);palette.close();}
     }
 
+    if(qmlContext(window)->contextProperty("supports3D").toBool()) {
+        player.pause();player.setMotion(false);player.setThreeD(true);
+        check(wait([&]{return window->property("threeDActive").toBool();}),"optional 3D view loads successfully");
+        {Player restored(temp+"/player.ini");check(restored.threeD(),"3D preference survives relaunch");}
+        for(const auto &medium:QStringList{"vinyl","cd","cassette"}) {
+            player.setMedium(medium);QTest::qWait(300);
+            capture("3d-"+medium);
+            auto *view=item("player3DView");
+            check(view&&view->isVisible(),"each physical medium has a 3D view");
+
+            check(view&&view->property("camera").value<QObject*>(),"3D scene has an active camera");
+            check(item("playerDeck")->mapToScene(QPointF())==deckPos&&item("sourceBar")->mapToScene(QPointF())==barPos,"3D leaves playback and source controls in their familiar positions");
+            if(view&&window->isExposed()) {
+                player.seek(0);QTest::qWait(80);
+                const auto sourcePoint=medium=="cassette" ? item("cassetteSeek")->mapToItem(item("mediaSurface"),QPointF(80,18)) : item("scrubber")->mapToItem(item("mediaSurface"),QPointF(436,220));
+                QVariant mapped;
+                QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,mapped),Q_ARG(QVariant,sourcePoint.x()),Q_ARG(QVariant,sourcePoint.y()));
+                QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,view->mapToScene(mapped.toPointF()).toPoint());
+                check(wait([&]{return qAbs(player.position()-player.duration()*.25)<1200;}),"projected 3D progress control seeks accurately");
+                if(medium=="cd") {
+                    for(double zoom:{.85,1.5}) {
+                        typography->setProperty("uiScale",zoom);QTest::qWait(120);player.seek(0);
+                        const auto point=item("scrubber")->mapToItem(item("mediaSurface"),QPointF(436,220));QVariant out;
+                        QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,out),Q_ARG(QVariant,point.x()),Q_ARG(QVariant,point.y()));
+                        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,view->mapToScene(out.toPointF()).toPoint());
+                        check(wait([&]{return qAbs(player.position()-player.duration()*.25)<1200;}),"3D seeking remains accurate after interface scaling");
+                    }
+                    typography->setProperty("uiScale",1.);QTest::qWait(120);
+                }
+                if(medium=="vinyl") {
+                    player.seek(8000);QTest::qWait(80);
+                    const auto oldRim=item("scrubber")->mapToScene(QPointF(220,2)).toPoint();
+                    QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,oldRim);QTest::qWait(80);
+                    check(qAbs(player.position()-8000)<700,"empty 3D space cannot activate the hidden flat seek control");
+                    const auto project=[&](QPointF p){QVariant out;QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,out),Q_ARG(QVariant,p.x()),Q_ARG(QVariant,p.y()));return view->mapToScene(out.toPointF()).toPoint();};
+                    auto *needle=item("needleHandle");auto *tonearm=item("vinylTonearm");
+                    const auto start=project(tonearm->mapToItem(item("mediaSurface"),needle->property("tip").toPointF()));
+                    const double angle=16.*M_PI/180.;
+                    const auto finish=project(tonearm->mapToItem(item("mediaSurface"),QPointF(378-197*std::sin(angle),100+197*std::cos(angle))));
+                    QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,start);QTest::qWait(30);
+                    check(tonearm->property("dragging").toBool(),"3D needle accepts a grab at its projected position");
+                    for(int step=1;step<=8;++step){QTest::mouseMove(window,start+(finish-start)*step/8);QTest::qWait(20);}
+                    QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,finish);
+                    check(wait([&]{return player.playing()&&qAbs(player.position()-player.duration()*.5)<1300;}),"3D needle drop seeks and resumes playback");player.pause();
+                }
+
+            }
+        }
+        player.setMotion(true);auto *view=item("player3DView");
+        if(view&&window->isExposed()) {
+            QTest::mouseMove(window,view->mapToScene(QPointF(430,180)).toPoint());QTest::qWait(250);
+            check(std::abs(view->property("yawOffset").toDouble())>0.1,"3D responds to gentle pointer tilt");
+            player.setMotion(false);QTest::qWait(50);
+            check(view->property("yawOffset").toDouble()==0&&view->property("pitchOffset").toDouble()==0,"reduced motion disables perspective tilt");
+        }
+        player.setMiniMode(true);QTest::qWait(100);
+        check(!window->property("threeDActive").toBool(),"Mini mode unloads the 3D view");
+        player.setMiniMode(false);QTest::qWait(150);
+        window->setProperty("discFlipped",true);QTest::qWait(150);
+        check(!window->property("threeDActive").toBool(),"reverse details remain flat and readable");
+        window->setProperty("discFlipped",false);player.setThreeD(false);QTest::qWait(150);
+        check(!window->property("threeDActive").toBool()&&!item("scene3DLoader")->property("active").toBool(),"disabling 3D releases its scene");
+    }
+
+    player.setThreeD(false);player.setMotion(false);
+    auto *notice=item("actionNotice");auto *dismiss=item("dismissActionNotice");
+    for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette")})
+        for(bool mini:{false,true})for(bool horizontal:{false,true}) {
+            player.setMedium(medium);player.setMiniMode(mini);player.setHorizontalSeek(horizontal);
+            QMetaObject::invokeMethod(window,"notifyAction",Q_ARG(QVariant,QString("Playback message")),Q_ARG(QVariant,true));
+            QTest::qWait(180);
+            for(double scale:{.65,1.,1.5}) {
+                typography->setProperty("uiScale",scale);QTest::qWait(60);
+                const auto bounds=notice->mapRectToScene(notice->boundingRect());
+                const auto *controls=item(mini?"miniControls":"playerDeck");
+                const auto controlsBounds=controls->mapRectToScene(controls->boundingRect());
+                check(notice->isVisible()&&bounds.top()>=controlsBounds.bottom()
+                    &&QRectF(0,0,window->width(),window->height()).contains(bounds),
+                    qPrintable(medium+QString(" %1 horizontal %2 scale %3: feedback fits below controls").arg(mini?"Mini":"full").arg(horizontal).arg(scale)));
+            }
+            QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,dismiss->mapToScene(QPointF(dismiss->width()/2,dismiss->height()/2)).toPoint());
+            check(wait([&]{return !notice->isVisible();}),"scaled feedback dismissal remains clickable");
+        }
+    typography->setProperty("uiScale",1.);player.setMiniMode(false);player.setHorizontalSeek(false);QTest::qWait(100);
+    check(window->property("layoutHeight").toInt()==730,"full player returns to its regular height after feedback closes");
     std::cout<<"MEDIA UI RESULT "<<failures<<" failures"<<std::endl;return failures?1:0;
 }

@@ -100,7 +100,7 @@ public:
     QString title() const { return m_title.isEmpty() ? "Cider" : m_title; }
     QString artist() const { return m_artist; }
     QString album() const { return m_album; }
-    QString albumKey() const { return m_album.isEmpty() ? m_track : m_album+"|"+m_artUrl.path(); }
+    QString albumKey() const { return m_album.isEmpty() ? m_track : m_album+"|"+m_desktopArtUrl.path(); }
     QVariantMap discDetails() const { return m_discDetails; }
     bool discVisible() const { return m_discVisible; }
     bool discLoading() const { return m_discLoading; }
@@ -203,7 +203,7 @@ private slots:
 private:
     void updateEvents();
     bool m_listeningBusy=false;
-    bool m_liveVisible=false, m_eventQueue=false, m_eventSettings=false;
+    bool m_liveVisible=false, m_eventQueue=false, m_eventSettings=false, m_eventTrack=false;
     CiderEvents m_events;
     QTimer m_eventCoalesce;
     QString m_audioQuality;
@@ -260,6 +260,8 @@ private:
     void set(const QString &key, const QVariant &value);
     void decodeArt();
     void loadArt(const QUrl &url);
+    void refreshArtwork();
+    void requestCurrentArtwork();
     void fail(const QString &message);
     void schedule(const QString &key, std::function<void()> action);
     void flushCommands();
@@ -271,7 +273,11 @@ private:
     bool m_canSeek = false, m_canNext = false, m_canPrevious = false;
     QString m_playbackStatus="Stopped";
     QString m_title, m_artist, m_album, m_track, m_error;
-    QUrl m_artUrl;
+    QUrl m_artUrl, m_desktopArtUrl;
+    QTimer m_coverRetry;
+    QPointer<QNetworkReply> m_coverReply;
+    quint64 m_coverGeneration=0, m_metadataRevision=0;
+    int m_coverAttempts=0;
     QImage m_art;
     QFutureWatcher<QImage> m_artLoader;
     QByteArray m_pendingArtBytes;

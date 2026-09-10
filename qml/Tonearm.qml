@@ -5,8 +5,9 @@ Item {
     id: arm
     objectName: "vinylTonearm"
     required property var app
+    property alias pointerInput: needleHit
     readonly property bool motion: app.animate && visible && app.visible && native.exposed
-    readonly property bool engaged: visible && app.deckPlayer.count > 0 && ((app.deckPlayer.playing && !app.swapRunning) || landing)
+    readonly property bool engaged: visible && app.deckPlayer.count > 0 && ((app.deckPlayer.playing && !app.swapRunning) || landing || app.seekPreviewActive)
     readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool dragging: false
     property real dragAngle: -4
@@ -19,10 +20,10 @@ Item {
     property real landingProgress: 0
     readonly property real previewProgress: Math.max(0, Math.min(1, (rawAngle - 6) / 20))
     property real lowered: dragging ? .12 : engaged ? 1 : 0
-    property real groove: landing ? landingProgress : Math.max(0, Math.min(1, app.recordProgress))
+    property real groove: Math.max(0, Math.min(1, app.recordVisualProgress))
     property real armAngle: dragging ? dragAngle : engaged ? 6 + 20 * groove : -4
     Behavior on armAngle {
-        enabled: arm.motion && !arm.dragging
+        enabled: arm.motion && !arm.app.seekPreviewActive
         SpringAnimation { id: angleSpring; spring: 6; damping: .55; epsilon: .01 }
     }
     function cancelDrag(resume) {
@@ -54,6 +55,11 @@ Item {
     Timer { id: landingTimeout; interval: 1200; onTriggered: arm.landing = false }
     Connections {
         target: arm.app
+        function onSeekPreviewActiveChanged() {
+            if (arm.app.seekPreviewActive && !arm.dragging) { arm.landing=false; landingTimeout.stop() }
+        }
+        function onThreeDRequestedChanged() { arm.cancelDrag(true) }
+        function onVisibleChanged() { if(!arm.app.visible)arm.cancelDrag(true) }
         function onCassetteTrackIdentityChanged() { arm.cancelDrag(false); arm.landing = false }
         function onRecordKeyChanged() { arm.cancelDrag(true); arm.landing = false }
     }
@@ -75,7 +81,7 @@ Item {
     SpunToolTip {
         objectName: "needleToolTip"
         parent: arm; x: 184; y: 60
-        visible: arm.canSeek && arm.app.visible && (arm.dragging || (!needleHit.hintDismissed && needleHit.hoveringNeedle) || (needleHit.activeFocus && !needleHit.pointerFocus))
+        visible: !arm.app.threeDActive && arm.canSeek && arm.app.visible && (arm.dragging || (!needleHit.hintDismissed && needleHit.hoveringNeedle) || (needleHit.activeFocus && !needleHit.pointerFocus))
         delay: arm.dragging ? 0 : 650
         text: {
             const target = arm.app.recordTarget(arm.previewProgress)
@@ -189,13 +195,13 @@ Item {
             return Qt.point(378 - 197 * Math.sin(angle), 100 + 197 * Math.cos(angle))
         }
         containmentMask: QtObject {
-            function contains(point) { return Math.hypot(point.x - needleHit.tip.x, point.y - needleHit.tip.y) <= 27 }
+            function contains(point: point): bool { return Math.hypot(point.x - needleHit.tip.x, point.y - needleHit.tip.y) <= 27 }
         }
         cursorShape: arm.dragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         Accessible.role: Accessible.Slider
         Accessible.name: "Needle position"
         Accessible.description: "Drag onto the grooves to seek and play. Hold Shift for precision. Arrow keys seek; Enter starts playback; Escape cancels dragging."
-        onPressed: mouse => {
+        function beginPointer(mouse) {
             if (Math.hypot(mouse.x - tip.x, mouse.y - tip.y) > 27) { mouse.accepted = false; return }
             pointerFocus = true
             forceActiveFocus()
@@ -206,8 +212,8 @@ Item {
             arm.dragging = true; arm.landing = false; landingTimeout.stop()
             if (arm.wasPlaying) arm.app.deckPlayer.pause()
         }
-        onPositionChanged: mouse => {
-            if (!pressed || !arm.dragging) return
+        function movePointer(mouse) {
+            if (!arm.dragging) return
             const dx = mouse.x - 378, dy = mouse.y - 100
             arm.pointerDistance = Math.hypot(dx, dy)
             const pointer = Math.atan2(-dx, dy) * 180 / Math.PI
@@ -217,8 +223,12 @@ Item {
             arm.lastPointerAngle=pointer
             arm.dragAngle = Math.max(-8, Math.min(38, arm.rawAngle))
         }
-        onReleased: { hintDismissed = true; arm.dropNeedle() }
-        onCanceled: { hintDismissed = true; arm.cancelDrag(true) }
+        function endPointer() { hintDismissed = true; arm.dropNeedle() }
+        function cancelPointer() { hintDismissed = true; arm.cancelDrag(true) }
+        onPressed: mouse => beginPointer(mouse)
+        onPositionChanged: mouse => { if(pressed)movePointer(mouse) }
+        onReleased: endPointer()
+        onCanceled: cancelPointer()
         onWheel: wheel => { wheel.accepted = false }
         Keys.onShortcutOverride: event => { if ([Qt.Key_Escape,Qt.Key_Left,Qt.Key_Right,Qt.Key_Return,Qt.Key_Enter].includes(event.key)) event.accepted = true }
         Keys.onEscapePressed: arm.cancelDrag(true)

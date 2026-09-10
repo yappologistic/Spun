@@ -41,6 +41,8 @@ static QVariantMap asMap(QVariant v) {
 Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, QObject *parent)
     : QObject(parent), m_enabled(enabled), m_connectionPath(connectionPath), m_rpcBase(rpcBase) {
     m_rpcNetwork.setProxy(QNetworkProxy::NoProxy);
+    m_coverRetry.setSingleShot(true);
+    connect(&m_coverRetry,&QTimer::timeout,this,&Cider::requestCurrentArtwork);
     QFile connection(m_connectionPath);
     if (connection.open(QIODevice::ReadOnly))
         m_apiToken = QJsonDocument::fromJson(connection.readAll()).object().value("token").toString();
@@ -57,6 +59,7 @@ Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, Q
         emit liveChanged();
     });
     connect(&m_events,&CiderEvents::event,this,[this](const QString &type) {
+        if(type=="playbackStatus.nowPlayingItemDidChange")m_eventTrack=true;
         if(type=="queueStatus.queueChanged" || type=="playbackStatus.nowPlayingItemDidChange")m_eventQueue=true;
         else if(type.startsWith("audioStatus.") || type=="playbackStatus.nowPlayingStatusDidChange" || type=="queueStatus.smartQueueChanged")m_eventSettings=true;
         else return;
@@ -64,6 +67,7 @@ Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, Q
     });
     connect(&m_eventCoalesce,&QTimer::timeout,this,[this] {
         const bool queue=std::exchange(m_eventQueue,false),settings=std::exchange(m_eventSettings,false);
+        if(std::exchange(m_eventTrack,false)) { refresh(); refreshArtwork(); }
         if(queue && (m_queueVisible || m_libraryVisible))refreshQueue();
         if(settings)emit remoteSettingsChanged();
     });
@@ -77,7 +81,7 @@ Cider::Cider(bool enabled, const QString &connectionPath, const QUrl &rpcBase, Q
         if (owner.isEmpty()) {
             m_tick.stop();
             m_available = m_playing = false; m_title.clear(); m_artist.clear(); m_album.clear();
-            m_position = m_duration = 0; loadArt({});
+            m_position = m_duration = 0; m_track.clear(); m_desktopArtUrl=QUrl(); refreshArtwork();
             m_queue.clear(); m_queueIndex = -1; ++m_queueRevision; m_queueReady = false; m_modesReady=false; emit settingsChanged(); emit currentIndexChanged(); emit queueChanged(); emit queueStatusChanged();
             emit trackChanged(); emit playingChanged(); emit positionChanged();
         } else refresh();
@@ -101,7 +105,8 @@ void Cider::refresh() {
     auto message = QDBusMessage::createMethodCall(service, path, props, "GetAll");
     message << iface;
     auto *watch = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message, 1500), this);
-    connect(watch, &QDBusPendingCallWatcher::finished, this, [this, watch] {
+    const auto metadataRevision=m_metadataRevision;
+    connect(watch, &QDBusPendingCallWatcher::finished, this, [this, watch, metadataRevision] {
         QDBusPendingReply<QVariantMap> reply = *watch;
         watch->deleteLater(); m_refreshing = false;
         if (reply.isError()) {
@@ -109,7 +114,10 @@ void Cider::refresh() {
             return;
         }
         const bool wasAvailable = m_available; m_available = true;
-        apply(reply.value());
+        auto values=reply.value();
+        // A PropertiesChanged signal can overtake an older GetAll reply.
+        if(metadataRevision!=m_metadataRevision) { values.remove("Metadata"); values.remove("Position"); }
+        apply(values);
         if (!wasAvailable) { emit trackChanged(); refreshModes(); }
         if (m_launchTimer.isActive()) { m_launchTimer.stop(); emit launchChanged(); }
     });
@@ -125,11 +133,14 @@ void Cider::apply(const QVariantMap &v) {
         auto id = unwrap(meta.value("mpris:trackid"));
         const auto track = id.canConvert<QDBusObjectPath>() ? id.value<QDBusObjectPath>().path() : id.toString();
         const auto duration = unwrap(meta.value("mpris:length")).toLongLong()/1000;
-        metadataChanged = title != m_title || artist != m_artist || album != m_album || track != m_track || duration != m_duration;
+        const bool identityChanged = title != m_title || artist != m_artist || album != m_album || track != m_track;
+        metadataChanged = identityChanged || duration != m_duration;
         if (track != m_track) { m_position = 0; m_clock.restart(); }
         m_title = title; m_artist = artist; m_album = album; m_track = track; m_duration = duration;
         const auto url = QUrl(unwrap(meta.value("mpris:artUrl")).toString());
-        if (url != m_artUrl) loadArt(url);
+        const bool artworkChanged=identityChanged || url!=m_desktopArtUrl;
+        m_desktopArtUrl=url;
+        if(artworkChanged)refreshArtwork();
     }
     if (v.contains("PlaybackStatus")) {
         const auto status = unwrap(v.value("PlaybackStatus")).toString();
@@ -170,7 +181,7 @@ void Cider::apply(const QVariantMap &v) {
     if (metadataChanged) { emit trackChanged(); if (m_queueVisible || m_libraryVisible) refreshQueue(); if (m_discVisible) refreshDisc(); }
 }
 void Cider::propertiesChanged(const QString &interface, const QVariantMap &values, const QStringList &invalidated) {
-    if (interface == iface) { apply(values); if (!invalidated.isEmpty()) refresh(); }
+    if (interface == iface) { if(values.contains("Metadata") || invalidated.contains("Metadata"))++m_metadataRevision; apply(values); if (!invalidated.isEmpty()) refresh(); }
 }
 void Cider::seeked(qlonglong value) {
     m_desktopPosition=value/1000;
@@ -284,10 +295,65 @@ void Cider::raise() {
         QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(service,path,"org.mpris.MediaPlayer2","Raise"));
     } else ensureRunning();
 }
+void Cider::refreshArtwork() {
+    ++m_coverGeneration; m_coverAttempts=0; m_coverRetry.stop();
+    if(m_coverReply) { auto *reply=m_coverReply.data();m_coverReply=nullptr;reply->abort();reply->deleteLater(); }
+    // Paired Cider supplies artwork and track identity in one API response.
+    // Desktop metadata may momentarily combine a new track with an old URL.
+    if(m_apiToken.isEmpty()) { loadArt(m_desktopArtUrl); return; }
+    loadArt({});
+    if(!m_title.isEmpty())requestCurrentArtwork();
+}
+void Cider::requestCurrentArtwork() {
+    if(m_coverReply || m_apiToken.isEmpty() || m_title.isEmpty())return;
+    ++m_coverAttempts;
+    const auto generation=m_coverGeneration;
+    const auto tokenGeneration=m_tokenGeneration;
+    auto url=m_rpcBase;url.setPath("/api/v2/playback/now-playing");url.setQuery(QString());
+    QNetworkRequest request(url);request.setTransferTimeout(4000);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,QNetworkRequest::ManualRedirectPolicy);
+    request.setRawHeader("apptoken",m_apiToken.toUtf8());
+    auto *reply=m_rpcNetwork.get(request);m_coverReply=reply;
+    connect(reply,&QNetworkReply::readyRead,reply,[reply]{if(reply->bytesAvailable()>512*1024)reply->abort();});
+    connect(reply,&QNetworkReply::finished,this,[this,reply,generation,tokenGeneration]{
+        reply->deleteLater();
+        if(generation!=m_coverGeneration || tokenGeneration!=m_tokenGeneration)return;
+        m_coverReply=nullptr;
+        const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto json=QJsonDocument::fromJson(reply->readAll()).object();
+        const auto current=json.value("data").toObject();
+        const auto params=current.value("playParams").toObject();
+        const auto desktopId=m_track.section('/',-1);
+        QStringList ids;
+        for(const auto &key:{"id","catalogId","reportingId","libraryId"}) {
+            const auto id=params.value(key).toString();if(!id.isEmpty())ids.append(id);
+        }
+        // IDs take precedence over display names, including library/catalog aliases.
+        const bool sameTrack=!desktopId.isEmpty() && !ids.isEmpty() ? ids.contains(desktopId) :
+            current.value("name").toString()==m_title && !m_title.isEmpty() &&
+            current.value("albumName").toString()==m_album && current.value("artistName").toString()==m_artist;
+        if(reply->error()==QNetworkReply::NoError && status==200 && sameTrack) {
+            QString cover=current.value("artwork").toObject().value("url").toString();
+            cover.replace("{w}","1200").replace("{h}","1200").replace("{f}","jpg");
+            const QUrl art(cover);
+            if(!art.isEmpty() && (art.isLocalFile() || art.scheme()=="https" || art.scheme()=="http") && art.userInfo().isEmpty()) {
+                loadArt(art);return;
+            }
+        }
+        // Older Cider versions or restricted tokens retain desktop-only support.
+        if(status==401 || status==403 || status==404) { loadArt(m_desktopArtUrl); return; }
+        // Album playback and crossfade can expose the previous API item briefly.
+        // Never fall back to its artwork; retry only a bounded number of times.
+        if(m_coverAttempts<4) {
+            static constexpr int delays[]{250,750,2000};
+            m_coverRetry.start(delays[m_coverAttempts-1]);
+        }
+    });
+}
 void Cider::loadArt(const QUrl &url) {
     ++m_artGeneration; m_pendingArtBytes.clear(); m_pendingArtFile.clear();
     m_artUrl = url;
-    if (m_artReply) { m_artReply->abort(); m_artReply->deleteLater(); }
+    if (m_artReply) { auto *previous=m_artReply.data(); m_artReply=nullptr; previous->abort(); previous->deleteLater(); }
     m_art = {}; emit artworkChanged();
     if (url.isLocalFile()) { m_pendingArtFile=url.toLocalFile(); decodeArt(); return; }
     if (url.scheme() != "https" && url.scheme() != "http") return;
@@ -296,8 +362,10 @@ void Cider::loadArt(const QUrl &url) {
     m_artReply = m_network.get(request);
     auto *reply = m_artReply.data();
     connect(reply, &QNetworkReply::downloadProgress, this, [reply](qint64 received, qint64 total) { if (received > 12*1024*1024 || total > 12*1024*1024) reply->abort(); });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, url] {
-        if (url == m_artUrl && reply->error() == QNetworkReply::NoError) {
+    const auto generation=m_artGeneration;
+    connect(reply, &QNetworkReply::finished, this, [this, reply, generation] {
+        if (m_artReply == reply) m_artReply=nullptr;
+        if (generation == m_artGeneration && reply->error() == QNetworkReply::NoError) {
             m_pendingArtBytes = reply->readAll();
             decodeArt();
         }
@@ -369,7 +437,7 @@ void Cider::connectQueue(const QString &token) {
     ++m_tokenGeneration; m_queueBusy=false;
     if(!m_batchOps.isEmpty()) { m_afterQueue={};finishBatch(false); }
     if(!m_cleanupIndices.isEmpty()) { m_afterQueue={};finishCleanup(false); }
-    m_apiToken=value; m_volumeReady=false;refreshVolume(); m_needsToken=false; m_queueError.clear();updateEvents();
+    m_apiToken=value; refreshArtwork(); m_volumeReady=false;refreshVolume(); m_needsToken=false; m_queueError.clear();updateEvents();
     m_recoveryTimer.stop(); m_connectionState.clear(); m_connectionMessage.clear(); emit connectionChanged();
     if(m_queueVisible || m_libraryVisible)m_queuePoll.start();
     refreshQueue();
@@ -1028,7 +1096,7 @@ void Cider::setLiveVisible(bool visible) {
 }
 void Cider::updateEvents() {
     m_events.configure(m_liveVisible,m_rpcBase,m_apiToken.toUtf8());
-    if(!m_liveVisible) { m_eventCoalesce.stop();m_eventQueue=m_eventSettings=false; }
+    if(!m_liveVisible) { m_eventCoalesce.stop();m_eventQueue=m_eventSettings=m_eventTrack=false; }
 }
 
 void Cider::editQueueSelection(const QVariantList &indices, const QString &operation, int revision) {

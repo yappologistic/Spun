@@ -10,7 +10,8 @@ ApplicationWindow {
     visible: true
     readonly property real layoutWidth: miniMode ? 300 : sideOpen ? 860 : 530
     readonly property real miniBaseHeight: showHorizontalSeek ? 382 : 354
-    readonly property real layoutHeight: miniMode ? miniBaseHeight + (actionNotice.visible ? 48 : 0) : 730
+    readonly property real layoutHeight: miniMode ? miniBaseHeight + (actionNotice.visible ? 48 : 0)
+        : Math.max(730, actionNotice.visible ? actionNotice.y + actionNotice.height + 8 : 730)
     onLayoutHeightChanged: Qt.callLater(updateMask)
     readonly property real uiScale: testMode ? typography.uiScale : Math.min(typography.uiScale,
         Math.max(.5, (Screen.desktopAvailableWidth - 40) / layoutWidth),
@@ -22,7 +23,45 @@ ApplicationWindow {
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | (miniPinned && !native.supportsBlur ? Qt.WindowStaysOnTopHint : 0)
     font.family: SpunStyle.family
-    readonly property bool bodyVisible: player.showPlayerBody && !miniMode
+    readonly property bool threeDGesture: !!activeSeekControl || scrubber.scrubbing || !!(armLoader.item && armLoader.item.dragging)
+    readonly property bool threeDRequested: supports3D && player.threeD && !miniMode && !discFlipped
+    readonly property bool threeDActive: threeDRequested && scene3D.status === Loader.Ready
+    onThreeDRequestedChanged: cancel3DPointer()
+    onThreeDActiveChanged: { cancel3DPointer(); cancelSeekPreview(); scrubber.cancelScrub(); stopSwap(); Qt.callLater(updateMask) }
+    readonly property var tonearm: armLoader.item
+    property var threeDPointer: null
+    function pointerEvent(control, point, modifiers) {
+        const p=control.mapFromItem(mediaSurface,point.x,point.y)
+        return {x:p.x,y:p.y,modifiers:modifiers,accepted:true}
+    }
+    function controlAt3DPoint(point) {
+        if(menuOpen || swapRunning)return null
+        let control=null
+        if(vinyl && tonearm && tonearm.canSeek) {
+            const p=tonearm.mapFromItem(mediaSurface,point.x,point.y),tip=tonearm.pointerInput.tip
+            if(Math.hypot(p.x-tip.x,p.y-tip.y)<=27)control=tonearm.pointerInput
+        }
+        if(!control && cassette && cassetteSeek.enabled) {
+            const p=cassetteSeek.mapFromItem(mediaSurface,point.x,point.y)
+            if(p.x>=0&&p.x<=cassetteSeek.width&&p.y>=0&&p.y<=cassetteSeek.height)control=cassetteSeek.pointerInput
+        }
+        if(!control && !cassette && scrubber.canSeek) {
+            const p=scrubber.mapFromItem(mediaSurface,point.x,point.y)
+            if(scrubber.onRim(p.x,p.y))control=scrubber
+        }
+        return control
+    }
+    function begin3DPointer(point, modifiers) {
+        cancel3DPointer()
+        const control=controlAt3DPoint(point)
+        if(control) { const event=pointerEvent(control,point,modifiers);control.beginPointer(event);if(event.accepted)threeDPointer=control }
+    }
+    function move3DPointer(point, modifiers) {
+        if(threeDPointer)threeDPointer.movePointer(pointerEvent(threeDPointer,point,modifiers))
+    }
+    function end3DPointer() { const control=threeDPointer;threeDPointer=null;if(control)control.endPointer() }
+    function cancel3DPointer() { const control=threeDPointer;threeDPointer=null;if(control)control.cancelPointer() }
+    readonly property bool bodyVisible: (player.showPlayerBody || threeDRequested) && !miniMode
     readonly property real mediumScale: bodyVisible && !discFlipped ? .86 : 1
     readonly property color cassetteShell: player.cassetteFinish === "cream" ? "#bab29c" : player.cassetteFinish === "clear" ? "#b06f8285" : root.surface
     property real lidOpen: 0
@@ -43,7 +82,7 @@ ApplicationWindow {
         if (crossfadeMenu.visible) { crossfadeMenu.service.refreshCrossfade(); crossfadeMenu.service.refreshAudioOptions() }
         if (qualityPopup.visible) root.ciderService.refreshAudioQuality()
     }
-    Connections { target: player; function onMediumChanged() { root.spinSpeed = 0; root.stopSwap(); Qt.callLater(root.updateMask) } function onSettingsChanged() { if (!player.vinylAlbumMode || !player.vinyl) root.listeningService.cancelAlbumPosition() } }
+    Connections { target: player; function onMediumChanged() { root.cancel3DPointer(); root.spinSpeed = 0; root.stopSwap(); Qt.callLater(root.updateMask) } function onSettingsChanged() { if (!player.vinylAlbumMode || !player.vinyl) root.listeningService.cancelAlbumPosition() } }
     Connections { target: root.listeningService; function onFeedback(message, error) { root.notifyAction(message, error) } }
     Connections { target: root.ciderService; function onRemoteSettingsChanged() { root.refreshOpenCiderDetails() } }
     Timer {
@@ -53,7 +92,7 @@ ApplicationWindow {
     }
     property var deckPlayer: useCider ? root.ciderService : player
     readonly property string cassetteTrackIdentity: (useCider ? "cider:" : "local:") + (deckPlayer.trackKey || "")
-    onCassetteTrackIdentityChanged: Qt.callLater(syncTapeSound)
+    onCassetteTrackIdentityChanged: { cancel3DPointer(); Qt.callLater(syncTapeSound) }
     function syncTapeSound() { tapeSound.observe(useCider ? "cider" : "local", deckPlayer.trackKey || "") }
     Binding { target: tapeSound; property: "enabled"; value: root.cassette && player.cassetteSounds }
     Binding { target: tapeSound; property: "volume"; value: root.deckPlayer.volume }
@@ -75,7 +114,7 @@ ApplicationWindow {
         running: root.vinyl && player.vinylSkips && root.deckPlayer.playing && !root.needleDragging
         onTriggered: { root.skipGroove(); interval = 45000 + Math.floor(Math.random()*35000) }
     }
-    onUseCiderChanged: { if (!useCider) root.listeningService.cancelAlbumPosition(); cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
+    onUseCiderChanged: { stopSwap(); presentation.clear(); cancel3DPointer(); if (!useCider) root.listeningService.cancelAlbumPosition(); cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
     property bool lyricsView: false
     property real swapOffset: 0
     property real outgoingOffset: 0
@@ -88,7 +127,7 @@ ApplicationWindow {
     function stopSwap() { discSwap.stop(); resetSwap(); presentation.releaseOutgoing() }
     function presentDisc() {
         const albumKey = deckPlayer.count ? (useCider ? "cider:" : "local:") + (deckPlayer.albumKey || deckPlayer.title) : ""
-        presentation.present(deckPlayer.artwork, albumKey, animate && !discFlipped && visible && native.exposed, useCider || player.artworkLoading)
+        presentation.present(deckPlayer.artwork, albumKey, animate && !discFlipped && visible && native.exposed)
     }
     function syncLibrary() { if (!visible || visibility === Window.Minimized) { songMenu.close(); musicBrowser.closeActions() }; library.active = libraryOpen && useCider && visible && visibility !== Window.Minimized }
     function syncLyrics() { lyrics.remote = useCider; lyrics.active = discFlipped && lyricsView && visible && visibility !== Window.Minimized }
@@ -115,6 +154,22 @@ ApplicationWindow {
     readonly property string recordKey: recordMap ? (useCider ? "cider:" : "local:") + recordMap.rows.map(row => (row.track.id || row.track.path) + ":" + row.duration).join("|") : ""
     onRecordKeyChanged: scrubber.cancelScrub()
     readonly property real recordProgress: recordMap ? Math.max(0, Math.min(1, (recordMap.rows[recordMap.current].start + deckPlayer.position) / recordMap.total)) : progress
+    readonly property bool seekPreviewActive: !!activeSeekControl || scrubber.scrubbing || !!(tonearm && tonearm.dragging)
+    readonly property real recordVisualProgress: {
+        if (activeSeekControl) {
+            const fraction=activeSeekControl.previewValue
+            return recordMap ? (recordMap.rows[recordMap.current].start + fraction*recordMap.rows[recordMap.current].duration)/recordMap.total : fraction
+        }
+        if (scrubber.scrubbing) return scrubber.previewFraction
+        if (tonearm && tonearm.dragging) return tonearm.previewProgress
+        if (tonearm && tonearm.landing) return tonearm.landingProgress
+        return recordProgress
+    }
+    readonly property real trackVisualProgress: {
+        if (!recordMap) return recordVisualProgress
+        const target=recordTarget(recordVisualProgress)
+        return target ? target.position/recordMap.rows[target.index].duration : progress
+    }
     function recordTarget(fraction) {
         if (!recordMap) return null
         const value = Math.max(0, Math.min(recordMap.total - 1, fraction * recordMap.total))
@@ -137,6 +192,12 @@ ApplicationWindow {
         cancelSeekPreview(); scrubber.cancelScrub()
         stopSwap()
         syncLyrics()
+    }
+    function receiveMediaDrop(drop) {
+        const urls = drop.hasUrls ? drop.urls : []
+        if (urls.length && urls.every(url => url.toString().startsWith("file:"))) {
+            root.useLocal(); player.addUrls(urls); drop.acceptProposedAction()
+        } else if (root.openMusicLink(urls.length ? urls[0].toString() : drop.text, false)) drop.acceptProposedAction()
     }
     function flipDisc() { if (deckPlayer.count > 0) discFlipped = !discFlipped }
     readonly property bool miniPinned: miniMode && player.miniOnTop
@@ -347,7 +408,7 @@ ApplicationWindow {
     property real rememberedVolume: .65
     property var activeSeekControl: null
     property real tapeWindSpeed: 0
-    readonly property real cassetteVisualProgress: activeSeekControl ? activeSeekControl.value : progress
+    readonly property real cassetteVisualProgress: trackVisualProgress
     function cancelSeekPreview() { if (activeSeekControl) activeSeekControl.cancelSeek() }
     property real cassetteLeftAngle: 0
     property real cassetteRightAngle: 0
@@ -445,7 +506,7 @@ ApplicationWindow {
     Shortcut { sequence: "Up"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
     Shortcut { sequence: "Down"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
     Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: root.toggleMute() }
-    Shortcut { sequence: "Escape"; onActivated: { if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
+    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
     Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
     Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: root.flipDisc() }
     Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: root.helpOpen = !root.helpOpen }
@@ -574,6 +635,11 @@ ApplicationWindow {
         IconButton { visible: !native.hyprland; x: 300; y: 4; glyphName: "close"; tip: "Close Spun"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: Qt.quit() }
     }
 
+    Item {
+        id: mediaSurface
+        objectName: "mediaSurface"
+        opacity: root.threeDActive ? 0 : 1
+        width: 530; height: 530
     PlayerBody {
         objectName: "playerBody"
         x: 45; y: 74; width: 440; height: 440
@@ -585,6 +651,7 @@ ApplicationWindow {
         x: 45; y: 74; width: 440; height: 440
         visible: root.bodyVisible && root.packageOpacity > 0
         opacity: root.packageOpacity
+        transformOrigin: Item.TopLeft
         medium: player.medium; surface: root.surface; artwork: presentation.artwork; part: 2
         scale: .9 + .1 * root.packageOpacity
         transform: Rotation { origin.x: 44; origin.y: 220; axis.x: 0; axis.y: 1; axis.z: 0; angle: root.vinyl ? 0 : -35*root.lidOpen }
@@ -1061,7 +1128,7 @@ ApplicationWindow {
             objectName: "progressRing"
             anchors.fill: parent
             visible: !root.cassette && !(root.bodyVisible && root.discFlipped) && root.deckPlayer.count > 0
-            progress: scrubber.scrubbing ? scrubber.previewFraction : root.recordProgress
+            progress: root.recordVisualProgress
             phase: root.wavePhase
             amplitude: root.deckPlayer.playing ? 2.8 : 0
             accent: root.accent
@@ -1070,9 +1137,10 @@ ApplicationWindow {
         MouseArea {
             id: scrubber
             objectName: "scrubber"
+            preventStealing: true
             anchors.fill: parent
             // Reverse-side lyrics keep their hover input; the rim remains seekable.
-            containmentMask: QtObject { function contains(point) { return !root.discFlipped || scrubber.onRim(point.x, point.y) } }
+            containmentMask: QtObject { function contains(point: point): bool { return !root.discFlipped || scrubber.onRim(point.x, point.y) } }
             hoverEnabled: true
             property bool scrubbing: false
             property real previewFraction: 0
@@ -1096,20 +1164,25 @@ ApplicationWindow {
                 lastFraction=pointer
             }
             function cancelScrub() { scrubbing = false }
-            onPressed: mouse => {
+            function beginPointer(mouse) {
                 if (onRim(mouse.x,mouse.y) && canSeek) { updatePreview(mouse.x,mouse.y); lastFraction=previewFraction; if(mouse.modifiers & Qt.ShiftModifier)previewFraction=root.recordProgress; scrubbing=true }
                 else mouse.accepted=false
             }
-            onPositionChanged: mouse => { if(scrubbing)dragPreview(mouse.x,mouse.y,mouse.modifiers & Qt.ShiftModifier);else if(onRim(mouse.x,mouse.y))updatePreview(mouse.x,mouse.y) }
-            onReleased: {
+            function movePointer(mouse) { if(scrubbing)dragPreview(mouse.x,mouse.y,mouse.modifiers & Qt.ShiftModifier);else if(onRim(mouse.x,mouse.y))updatePreview(mouse.x,mouse.y) }
+            function endPointer() {
                 if (scrubbing && canSeek) { if (root.recordMap) root.dropRecordNeedle(previewFraction); else root.deckPlayer.seek(root.deckPlayer.duration * previewFraction) }
                 scrubbing=false
             }
-            onCanceled: cancelScrub()
+            function cancelPointer() { cancelScrub() }
+            onPressed: mouse => beginPointer(mouse)
+            onPositionChanged: mouse => movePointer(mouse)
+            onReleased: endPointer()
+            onCanceled: cancelPointer()
             onWheel: wheel => { if (root.discFlipped && !onRim(wheel.x,wheel.y)) { wheel.accepted=false; return }; root.deckPlayer.volume = Math.max(0, Math.min(1, root.deckPlayer.volume + wheel.angleDelta.y/2400)); wheel.accepted=true }
         }
         SeekSlider {
             app: root
+            id: cassetteSeek
             objectName: "cassetteSeek"
             visible: (root.cassette || (root.bodyVisible && root.discFlipped)) && root.deckPlayer.count > 0
             x: 70; y: root.bodyVisible && root.discFlipped ? 388 : 365; width: 300; height: 36
@@ -1118,12 +1191,7 @@ ApplicationWindow {
         DropArea {
             anchors.fill: parent
             onEntered: drag => { if (!drag.hasUrls && !drag.hasText) drag.accepted=false }
-            onDropped: drop => {
-                const urls = drop.hasUrls ? drop.urls : []
-                if (urls.length && urls.every(url => url.toString().startsWith("file:"))) {
-                    root.useLocal(); player.addUrls(urls); drop.acceptProposedAction()
-                } else if (root.openMusicLink(urls.length ? urls[0].toString() : drop.text, false)) drop.acceptProposedAction()
-            }
+            onDropped: drop => root.receiveMediaDrop(drop)
             Rectangle {
                 anchors.fill: parent; radius: width / 2
                 visible: parent.containsDrag
@@ -1137,7 +1205,7 @@ ApplicationWindow {
     PlayerBody {
         objectName: "playerLid"
         x: 45; y: 74; width: 440; height: 440
-        visible: root.bodyVisible && !root.discFlipped
+        visible: root.bodyVisible && !root.discFlipped && !root.threeDActive
         medium: player.medium; surface: root.surface; part: 1
         opacity: 1 - .75*root.lidOpen
         transform: Scale { origin.x: 220; origin.y: root.cassette ? 112 : 26; yScale: 1 - .35*root.lidOpen }
@@ -1145,7 +1213,7 @@ ApplicationWindow {
     Rectangle {
         id: rimPreview
         objectName: "rimPreview"
-        visible: scrubber.showPreview
+        visible: !root.threeDActive && scrubber.showPreview
         z: 10
         readonly property real angle: scrubber.previewFraction * 2 * Math.PI
         readonly property point location: platter.mapToItem(root.contentItem, 220 + Math.sin(angle)*170, 220 - Math.cos(angle)*170)
@@ -1153,6 +1221,28 @@ ApplicationWindow {
         width: root.recordMap ? 104 : 58; height: 26; radius: 13
         color: root.surface
         SpunText { anchors.centerIn: parent; text: { const target=root.recordTarget(scrubber.previewFraction); return target ? (target.index+1) + " · " + root.time(target.position) : root.time(root.deckPlayer.duration * scrubber.previewFraction) } font.pixelSize: SpunStyle.caption; color: root.accent }
+    }
+    }
+    Loader {
+        id: scene3D
+        objectName: "scene3DLoader"
+        x: 0; y: 60; width: 530; height: 470
+        active: root.threeDRequested
+        onActiveChanged: if(active)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
+        Component.onCompleted: if(active)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
+    }
+    DropArea {
+        objectName: "threeDMediaDrop"
+        x: 0; y: 60; width: 530; height: 470
+        enabled: root.threeDActive
+        onEntered: drag => { if(!drag.hasUrls && !drag.hasText)drag.accepted=false }
+        onDropped: drop => root.receiveMediaDrop(drop)
+        Rectangle {
+            anchors.fill: parent; radius: SpunStyle.panelRadius
+            visible: parent.containsDrag; color: root.inset; opacity: .94
+            border.width: 2; border.color: root.accent
+            SpunText { anchors.centerIn: parent; text: "Open music"; color: root.ink }
+        }
     }
     SeekSlider {
         app: root; objectName: "miniHorizontalSeek"
@@ -1992,7 +2082,14 @@ ApplicationWindow {
                             onToggled: player.cd500Rpm = checked
                             onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
                         }
-                        PreferenceSwitch { objectName: "playerBodyToggle"; app: root; width: parent.width; text: "Show player body"; glyphName: "disc"; checked: player.showPlayerBody; onToggled: player.showPlayerBody = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch {
+                            objectName: "threeDToggle"; app: root; width: parent.width
+                            visible: supports3D; height: visible ? implicitHeight : 0
+                            text: "3D player"; glyphName: "disc"; checked: player.threeD
+                            onToggled: player.threeD = checked
+                            onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
+                        }
+                        PreferenceSwitch { objectName: "playerBodyToggle"; app: root; width: parent.width; visible: !supports3D || !player.threeD; height: visible ? implicitHeight : 0; text: "Show player body"; glyphName: "disc"; checked: player.showPlayerBody; onToggled: player.showPlayerBody = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                         Row {
                             visible: root.cassette; height: visible ? 40 : 0; spacing: 6; width: parent.width
                             Repeater {

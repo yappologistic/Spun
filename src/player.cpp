@@ -41,6 +41,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_light = m_settings.value("light", false).toBool();
     m_medium=m_settings.value("medium",m_settings.value("vinyl",false).toBool()?"vinyl":"cd").toString();
     if(!QStringList{"cd","vinyl","cassette"}.contains(m_medium))m_medium="cd";
+    m_threeD=m_settings.value("threeD",false).toBool();
     m_cd500Rpm=m_settings.value("cd500Rpm",false).toBool();
     m_vinylSpeed=m_settings.value("vinylSpeed",33).toInt();
     if(m_vinylSpeed!=0&&m_vinylSpeed!=33&&m_vinylSpeed!=45)m_vinylSpeed=33;
@@ -477,6 +478,7 @@ void Player::setMedium(const QString &value) {
 }
 void Player::setShowPlayerBody(bool value) { if(value==m_showPlayerBody)return;m_showPlayerBody=value;emit settingsChanged();save(); }
 void Player::setCassetteFinish(const QString &value) { if(value==m_cassetteFinish || !QStringList{"clear","smoke","cream"}.contains(value))return;m_cassetteFinish=value;emit settingsChanged();save(); }
+void Player::setThreeD(bool value) { if(value==m_threeD)return;m_threeD=value;emit settingsChanged();save(); }
 void Player::setCd500Rpm(bool value) { if(value==m_cd500Rpm)return;m_cd500Rpm=value;emit settingsChanged();save(); }
 void Player::setVinylSpeed(int value) { if((value!=0&&value!=33&&value!=45)||value==m_vinylSpeed)return;m_vinylSpeed=value;emit settingsChanged();save(); }
 void Player::setHorizontalSeek(bool value) { if(value==m_horizontalSeek)return;m_horizontalSeek=value;emit settingsChanged();save(); }
@@ -496,6 +498,7 @@ void Player::save() {
     m_settings.setValue("medium", m_medium);
     m_settings.setValue("motion", m_motion);
     m_settings.setValue("cassetteSounds", m_cassetteSounds);
+    m_settings.setValue("threeD",m_threeD);
     m_settings.setValue("cd500Rpm",m_cd500Rpm);
     m_settings.setValue("vinylSpeed",m_vinylSpeed);
     m_settings.setValue("vinylAlbumMode",m_vinylAlbumMode);

@@ -1,7 +1,6 @@
 #pragma once
 #include <QQuickPaintedItem>
 #include <QImage>
-#include <QTimer>
 
 // A static view of the already decoded cover; no additional fetch or image cache.
 class ArtworkView : public QQuickPaintedItem {
@@ -47,6 +46,7 @@ public:
     QColor labelColor() const { return m_labelColor; }
     void setLabelColor(const QColor &value) { if (m_labelColor==value) return; m_labelColor=value; update(); emit labelColorChanged(); }
     static QImage fallbackArt(int size = 1000);
+    static QImage placeholderArt(int size = 512);
 signals:
     void vinylChanged();
     void cassetteChanged();
@@ -101,14 +101,13 @@ public:
     explicit DiscPresentation(QObject *parent=nullptr);
     QImage artwork() const { return m_art; }
     QImage outgoing() const { return m_outgoing; }
-    Q_INVOKABLE void present(const QImage &art, const QString &key, bool animate, bool waitForArt=false);
+    Q_INVOKABLE void present(const QImage &art, const QString &key, bool animate);
     Q_INVOKABLE void releaseOutgoing();
+    Q_INVOKABLE void clear() { present({}, {}, false); }
 signals:
     void changed();
     void swapRequested();
 private:
     QImage m_art, m_outgoing;
-    QString m_key, m_pendingKey;
-    bool m_pendingAnimate=false;
-    QTimer m_wait;
+    QString m_key;
 };

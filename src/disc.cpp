@@ -58,10 +58,19 @@ QImage Disc::fallbackArt(int size) {
     return image;
 }
 
+QImage Disc::placeholderArt(int size) {
+    QImage image(size,size,QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&image);
+    QLinearGradient finish(0,0,size,size);
+    finish.setColorAt(0,QColor("#44474d"));finish.setColorAt(1,QColor("#2b2d33"));
+    painter.fillRect(image.rect(),finish);
+    return image;
+}
+
 // All media use the identical fallback pixels. Share one immutable image even
 // after switching appearances; each painted item retains only an implicit copy.
 static const QImage &sharedFallbackArt() {
-    static const QImage image = Disc::fallbackArt();
+    static const QImage image = Disc::placeholderArt();
     return image;
 }
 
@@ -395,25 +404,21 @@ QSGNode *ProgressRing::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) 
     return node;
 }
 
-DiscPresentation::DiscPresentation(QObject *parent):QObject(parent) {
-    m_wait.setSingleShot(true); m_wait.setInterval(1500);
-    connect(&m_wait,&QTimer::timeout,this,[this]{const auto key=m_pendingKey;present({},key,m_pendingAnimate,false);});
-}
+DiscPresentation::DiscPresentation(QObject *parent):QObject(parent) {}
 void DiscPresentation::releaseOutgoing() {
     if (m_outgoing.isNull()) return;
     m_outgoing = {};
     emit changed();
 }
-void DiscPresentation::present(const QImage &art,const QString &key,bool animate,bool waitForArt) {
-    if(art.isNull() && waitForArt && !m_key.isEmpty() && !key.isEmpty()){
-        m_pendingAnimate=animate;
-        if(m_pendingKey!=key || !m_wait.isActive()){m_pendingKey=key;m_wait.start();}
-        return;
-    }
-    m_wait.stop(); m_pendingKey.clear();
+void DiscPresentation::present(const QImage &image,const QString &key,bool animate) {
+    // Only the outgoing animation may retain a previous cover. The current
+    // medium must not borrow artwork while a new track or source is loading.
+    const QImage art=key.isEmpty()?QImage():image;
     const bool swap=!key.isEmpty() && !m_key.isEmpty() && key!=m_key && animate;
+    const bool clearedOutgoing=(!animate || key.isEmpty()) && !m_outgoing.isNull();
     if(swap)m_outgoing=m_art;
-    if (!swap && m_key == key && m_art.cacheKey() == art.cacheKey()) return;
+    else if(clearedOutgoing)m_outgoing={};
+    if (!swap && !clearedOutgoing && m_key == key && m_art.cacheKey() == art.cacheKey()) return;
     m_art=art; m_key=key; emit changed();
     if(swap)emit swapRequested();
 }

@@ -4,6 +4,7 @@ import Spun 1.0
 SpunSlider {
     id: control
     required property var app
+    property alias pointerInput: seekPointer
     enabled: visible && !app.swapRunning && app.deckPlayer.duration > 0 && (!app.useCider || app.ciderService.canSeek)
     property bool scrubbing: false
     property real previewValue: 0
@@ -12,7 +13,7 @@ SpunSlider {
     property double lastMove: 0
     property string seekTrack: ""
     previewing: scrubbing
-    value: scrubbing ? previewValue : app.progress
+    value: scrubbing ? previewValue : app.trackVisualProgress
     function cancelSeek() {
         scrubbing=false; windDirection=0
         if(app.activeSeekControl===control)app.activeSeekControl=null
@@ -28,7 +29,7 @@ SpunSlider {
         anchors.fill: parent; preventStealing: true; acceptedButtons: Qt.LeftButton
         cursorShape: Qt.PointingHandCursor
         function fraction(x) { return Math.max(0, Math.min(1,(x-control.leftPadding)/(control.availableWidth-control.handle.width))) }
-        onPressed: mouse => {
+        function beginPointer(mouse) {
             control.forceActiveFocus(Qt.MouseFocusReason)
             control.seekTrack=control.app.cassetteTrackIdentity
             control.previewValue=(mouse.modifiers & Qt.ShiftModifier)?control.app.progress:fraction(mouse.x)
@@ -36,21 +37,25 @@ SpunSlider {
             control.scrubbing=true;control.app.activeSeekControl=control
             if(control.app.cassette)tapeSound.transport()
         }
-        onPositionChanged: mouse => {
-            if(!pressed || !control.scrubbing)return
+        function movePointer(mouse) {
+            if(!control.scrubbing)return
             const delta=(mouse.x-control.lastPointer)/(control.availableWidth-control.handle.width)
             control.previewValue=Math.max(0,Math.min(1,control.previewValue+delta*((mouse.modifiers & Qt.ShiftModifier)?.1:1)))
             control.lastPointer=mouse.x
             if(delta!==0){control.windDirection=Math.sign(delta);control.lastMove=Date.now()}
         }
-        onReleased: {
+        function endPointer() {
             if(!control.scrubbing)return
             const valid=control.enabled && control.seekTrack===control.app.cassetteTrackIdentity
             const position=control.previewValue
             control.cancelSeek()
             if(valid){control.app.deckPlayer.seek(position*control.app.deckPlayer.duration);if(control.app.cassette)tapeSound.transport()}
         }
-        onCanceled: control.cancelSeek()
+        function cancelPointer() { control.cancelSeek() }
+        onPressed: mouse => beginPointer(mouse)
+        onPositionChanged: mouse => { if(pressed)movePointer(mouse) }
+        onReleased: endPointer()
+        onCanceled: cancelPointer()
         onWheel: wheel => wheel.accepted=false
     }
     Keys.onShortcutOverride: event => { if(event.key===Qt.Key_Escape && scrubbing)event.accepted=true }

@@ -1,3 +1,8 @@
+#ifdef SPUN_WITH_3D
+#include "deckgeometry.h"
+#include "mediageometry.h"
+#include <QtQuick3D/qquick3d.h>
+#endif
 #include "player.h"
 #include "tapesound.h"
 #include "vinylnoise.h"
@@ -7,6 +12,8 @@
 #ifdef SPUN_DIAGNOSTICS
 #include "librarytest.h"
 #include "mediauitest.h"
+#include "artworktest.h"
+#include "threedtest.h"
 #include "testinput.h"
 #endif
 #include "lyrics.h"
@@ -173,7 +180,8 @@ public:
             if(cassette)if(auto *seek=window->findChild<QQuickItem *>("cassetteSeek"))region|=itemRegion(seek);
             if(window->property("swapRunning").toBool())region|=QRegion(45,74,440,440);
         }
-        if(!cassette && !body)region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
+        if(window->property("threeDActive").toBool())region=QRegion(12,62,506,460);
+        if(!cassette && !body && !window->property("threeDActive").toBool())region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
             region |= itemRegion(bar);
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
@@ -400,22 +408,23 @@ static int exerciseCiderQueue(const QString &temp) {
     QImage red(24,24,QImage::Format_ARGB32), blue=red;
     red.fill(Qt::red); blue.fill(Qt::blue);
     red.save(temp+"/red.png"); blue.save(temp+"/blue.png");
+    Cider artRemote(false);
     auto artworkUrl = [&](const QUrl &url) {
         const QVariantMap changes{{"Metadata",QVariantMap{{"mpris:artUrl",url.toString()}}}};
-        return QMetaObject::invokeMethod(&remote,"propertiesChanged",Qt::DirectConnection,
+        return QMetaObject::invokeMethod(&artRemote,"propertiesChanged",Qt::DirectConnection,
             Q_ARG(QString,QString("org.mpris.MediaPlayer2.Player")),Q_ARG(QVariantMap,changes),Q_ARG(QStringList,QStringList{}));
     };
     check(artworkUrl(QUrl::fromLocalFile(temp+"/red.png")), "Cider artwork fixture delivers metadata");
     artworkUrl(QUrl::fromLocalFile(temp+"/blue.png"));
-    check(waitFor([&]{return !remote.artwork().isNull() && remote.artwork().pixelColor(0,0)==QColor(Qt::blue);}),
+    check(waitFor([&]{return !artRemote.artwork().isNull() && artRemote.artwork().pixelColor(0,0)==QColor(Qt::blue);}),
           "asynchronous Cider artwork keeps the latest cover and original pixels");
     QImage large(3600,2400,QImage::Format_RGB32); large.fill(Qt::cyan);
     large.save(temp+"/large-cover.jpg","JPEG",95);
     artworkUrl(QUrl::fromLocalFile(temp+"/large-cover.jpg"));
-    check(waitFor([&]{return remote.artwork().size()==QSize(1200,800);}),
+    check(waitFor([&]{return artRemote.artwork().size()==QSize(1200,800);}),
           "oversized Cider covers use the full disc resolution with correct proportions");
     artworkUrl(QUrl::fromLocalFile(temp+"/red.png")); artworkUrl({}); QTest::qWait(150);
-    check(remote.artwork().isNull(), "disconnecting while Cider artwork decodes rejects the stale image");
+    check(artRemote.artwork().isNull(), "disconnecting while Cider artwork decodes rejects the stale image");
     return failures;
 }
 
@@ -502,8 +511,8 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     QImage first(16,16,QImage::Format_ARGB32);first.fill(Qt::red);QImage second=first;second.fill(Qt::blue);
     staged.present(first,"album-one",true); staged.present(first,"album-one",true);
     check(swaps==0, "startup and tracks from the same album do not swap discs");
-    staged.present({},"album-two",true,true);check(staged.artwork()==first, "old artwork stays until the incoming cover arrives");
-    staged.present(second,"album-two",true,true);check(swaps==1 && staged.outgoing()==first && staged.artwork()==second, "album swap retains the outgoing artwork separately");
+    staged.present({},"album-two",true);check(staged.artwork().isNull() && staged.outgoing()==first, "pending cover clears the current medium while retaining only the outgoing disc");
+    staged.present(second,"album-two",true);check(swaps==1 && staged.outgoing()==first && staged.artwork()==second, "album swap retains the outgoing artwork separately");
     staged.present(first,"album-three",false);check(swaps==1 && staged.artwork()==first, "reduced motion replaces artwork immediately");
     staged.releaseOutgoing();check(staged.outgoing().isNull() && staged.artwork()==first,
           "finished disc swaps release the previous cover without changing the current disc");
@@ -545,6 +554,12 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         player.clear();window->setProperty("queueOpen",false);QTest::qWait(100);
     }
     if (type) {
+        // The queue fixture leaves import feedback visible. Dismiss it before
+        // checking the base size; visible feedback intentionally adds height.
+        auto *notice = findItem(window->contentItem(), "actionNotice");
+        if (notice && notice->isVisible()) click("dismissActionNotice");
+        check(waitFor([&] { return !notice || !notice->isVisible(); }),
+              "scaling checks start after import feedback is dismissed");
         type->setUiScale(1.25);QTest::qWait(150);
         check(window->width()==qRound(window->property("layoutWidth").toReal()*1.25)
               &&qFuzzyCompare(window->property("contentItem").value<QQuickItem*>()->scale(),1.25)
@@ -1501,7 +1516,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--self-test" || option == "--test-media-ui" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--self-test" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1521,6 +1536,9 @@ int main(int argc, char **argv) {
     if (!qEnvironmentVariableIsSet("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES"))
         qputenv("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES", ",");
     QGuiApplication app(argc, argv);
+#ifdef SPUN_WITH_3D
+    QSurfaceFormat::setDefaultFormat(QQuick3D::idealSurfaceFormat());
+#endif
     const qint64 applicationReady = startup.elapsed();
     app.setApplicationName("spun"); app.setApplicationDisplayName("Spun");
     app.setOrganizationName("Spun"); app.setApplicationVersion("0.1.0");
@@ -1530,6 +1548,10 @@ int main(int argc, char **argv) {
     parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"test-library", "Run isolated music browser checks"});
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
+    parser.addOption({"test-artwork", "Verify artwork updates across playback sources and physical media"});
+    parser.addOption({"test-3d-lighting", "Verify live palette changes in rendered 3D pixels"});
+    parser.addOption({"test-3d-ui", "Run isolated native 3D interaction and lifecycle checks"});
+    parser.addOption({"test-3d-library", "Run isolated library checks with 3D enabled"});
     parser.addOption({"test-media-ui", "Run isolated vinyl and cassette interaction checks"});
     parser.addOption({"test-import-ui", "Run isolated folder import UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
@@ -1543,7 +1565,8 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    if(test && qEnvironmentVariableIsSet("SPUN_TEST_SCREEN"))app.setDesktopFileName("spun-diagnostics");
     if (!test && !parser.isSet("config")) {
         auto bus = QDBusConnection::sessionBus();
         if (bus.interface() && bus.interface()->isServiceRegistered("org.mpris.MediaPlayer2.spun")) {
@@ -1588,12 +1611,29 @@ int main(int argc, char **argv) {
     const qint64 backendReady = startup.elapsed();
 
     qmlRegisterType<Symbol>("Spun", 1, 0, "Symbol");
+#ifdef SPUN_WITH_3D
+    qmlRegisterType<DeckGeometry>("Spun",1,0,"DeckGeometry");
+    qmlRegisterType<RecordGeometry>("Spun",1,0,"RecordGeometry");
+    qmlRegisterType<CoverTexture>("Spun",1,0,"CoverTexture");
+    qmlRegisterType<SurfaceTexture>("Spun",1,0,"SurfaceTexture");
+    qmlRegisterType<StudioTexture>("Spun",1,0,"StudioTexture");
+    qmlRegisterType<WaveGeometry>("Spun",1,0,"WaveGeometry");
+#endif
     qmlRegisterType<PlayerBody>("Spun",1,0,"PlayerBody");
     qmlRegisterType<Disc>("Spun", 1, 0, "Disc");
     qmlRegisterType<ArtworkView>("Spun", 1, 0, "ArtworkView");
     qmlRegisterType<ProgressRing>("Spun", 1, 0, "ProgressRing");
     QQmlApplicationEngine engine;
+    if(test) QObject::connect(&engine, &QQmlEngine::warnings, &app, [](const QList<QQmlError> &errors) {
+        for(const auto &error:errors) std::cerr << "QML " << error.toString().toStdString() << std::endl;
+    });
     engine.addImageProvider("queueart", new QueueArtworkProvider);
+#ifdef SPUN_WITH_3D
+    engine.rootContext()->setContextProperty("supports3D", qEnvironmentVariable("QT_QUICK_BACKEND") != "software");
+#else
+    engine.rootContext()->setContextProperty("supports3D", false);
+#endif
+    engine.rootContext()->setContextProperty("player3DUrl", QUrl(QStringLiteral("qrc:/qml/Player3D.qml")));
     engine.rootContext()->setContextProperty("player", &player);
     engine.rootContext()->setContextProperty("theme", &theme);
     engine.rootContext()->setContextProperty("typography", &typography);
@@ -1641,6 +1681,14 @@ int main(int argc, char **argv) {
     qmlReady = startup.elapsed();
     if (engine.rootObjects().isEmpty()) return 1;
     auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    if (test && qEnvironmentVariableIsSet("SPUN_TEST_SCREEN")) {
+        const auto name=qEnvironmentVariable("SPUN_TEST_SCREEN");
+        QScreen *screen=nullptr;
+        for(auto *candidate:app.screens())if(candidate->name()==name)screen=candidate;
+        if(!screen){std::cerr<<"Requested test screen is unavailable.\n";return 2;}
+        window->setScreen(screen);
+        window->setPosition(screen->availableGeometry().topLeft()+QPoint(60,60));
+    }
     if (!test) { if (auto *mediaControls = registerMpris(&player, &cider)) mediaControls->setSourceWindow(window); }
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &player, &Player::save);
     if (parser.isSet("benchmark")) {
@@ -2022,6 +2070,10 @@ int main(int argc, char **argv) {
         std::cout << "RESULT " << failures << " failures" << std::endl;
         app.exit(failures ? 1 : 0);
     });
+    else if (parser.isSet("test-artwork")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseArtwork(player,window,temp.path(),parser.value("capture-dir"))); });
+    else if (parser.isSet("test-3d-lighting")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeDLighting(player,window,temp.path(),parser.value("capture-dir"))); });
+    else if (parser.isSet("test-3d-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeD(player,window,temp.path(),parser.value("capture-dir"))); });
+    else if (parser.isSet("test-3d-library")) QTimer::singleShot(650, &app, [&] { player.setThreeD(true); if(!waitFor([&]{return window->property("threeDActive").toBool();})) { std::cerr << "FAIL 3D scene must be active for Cider integration tests" << std::endl;app.exit(2);return; } app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
     else if (parser.isSet("test-media-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseMediaUi(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-library")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
     else if (test) QTimer::singleShot(650, &app, [&] {
