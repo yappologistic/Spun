@@ -36,6 +36,7 @@
 !/assets/icons/
 /assets/icons/*
 !/assets/icons/*.svg
+!flake.nix
 
 # Never publish credentials, private state, editor backups or generated caches.
 .env*
