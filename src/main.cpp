@@ -12,6 +12,7 @@
 #include "lyrics.h"
 #include "artwork.h"
 #include "disc.h"
+#include "playerbody.h"
 #include "symbol.h"
 #include "mpris.h"
 #include "theme.h"
@@ -160,9 +161,19 @@ public:
             QPainterPath backdrop; backdrop.addRoundedRect(QRectF(0, 0, targetWidth, targetHeight), 21, 21);
             setMask(QRegion(backdrop.toFillPolygon().toPolygon())); return;
         }
+        const bool body=window->property("bodyVisible").toBool();
         QRegion region=cassette?QRegion(60,156,410,276):QRegion(44,73,442,442,QRegion::Ellipse);
         if(cassette)region|=QRegion(115,439,300,36);
-        if(!cassette)region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
+        if(body) {
+            QPainterPath housing;
+            if(window->property("discFlipped").toBool())housing.addRoundedRect(QRectF(87,104,357,387),5,5);
+            else if(cassette)housing.addRoundedRect(QRectF(58,151,414,295),28,28);
+            else housing.addRoundedRect(QRectF(45,74,440,440),window->property("vinyl").toBool()?28:220,window->property("vinyl").toBool()?28:220);
+            region=QRegion(housing.toFillPolygon().toPolygon());
+            if(cassette)if(auto *seek=window->findChild<QQuickItem *>("cassetteSeek"))region|=itemRegion(seek);
+            if(window->property("swapRunning").toBool())region|=QRegion(45,74,440,440);
+        }
+        if(!cassette && !body)region -= window->property("vinyl").toBool()?QRegion(259,288,12,12,QRegion::Ellipse):QRegion(243,272,44,44,QRegion::Ellipse);
         if (auto *bar = window->findChild<QQuickItem *>("sourceBar"))
             region |= itemRegion(bar);
         if (auto *deck = window->findChild<QQuickItem *>("playerDeck"))
@@ -1577,6 +1588,7 @@ int main(int argc, char **argv) {
     const qint64 backendReady = startup.elapsed();
 
     qmlRegisterType<Symbol>("Spun", 1, 0, "Symbol");
+    qmlRegisterType<PlayerBody>("Spun",1,0,"PlayerBody");
     qmlRegisterType<Disc>("Spun", 1, 0, "Disc");
     qmlRegisterType<ArtworkView>("Spun", 1, 0, "ArtworkView");
     qmlRegisterType<ProgressRing>("Spun", 1, 0, "ProgressRing");
@@ -1624,6 +1636,7 @@ int main(int argc, char **argv) {
                 ++frames;
             });
     });
+    if(test) player.setShowPlayerBody(false);
     engine.load(QUrl("qrc:/qml/Main.qml"));
     qmlReady = startup.elapsed();
     if (engine.rootObjects().isEmpty()) return 1;

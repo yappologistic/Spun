@@ -134,9 +134,11 @@ void Disc::paintVinyl(QPainter *p) {
     if (m_overlay) {
         // Fixed light over a rotating, cached record texture; no per-frame painting.
         QConicalGradient sheen(center,24);
-        sheen.setColorAt(0,Qt::transparent); sheen.setColorAt(.12,QColor(190,202,218,18));
+        sheen.setColorAt(0,Qt::transparent); sheen.setColorAt(.07,Qt::transparent);
+        sheen.setColorAt(.12,QColor(203,216,229,37));sheen.setColorAt(.155,QColor(203,216,229,10));
         sheen.setColorAt(.22,Qt::transparent); sheen.setColorAt(.5,Qt::transparent);
-        sheen.setColorAt(.63,QColor(255,235,205,14)); sheen.setColorAt(.73,Qt::transparent); sheen.setColorAt(1,Qt::transparent);
+        sheen.setColorAt(.61,QColor(244,233,214,28));sheen.setColorAt(.67,QColor(244,233,214,5));
+        sheen.setColorAt(.73,Qt::transparent); sheen.setColorAt(1,Qt::transparent);
         p->fillPath(record,sheen); return;
     }
     QRadialGradient body(center,500);
@@ -145,10 +147,13 @@ void Disc::paintVinyl(QPainter *p) {
     p->fillPath(record,body);
     p->setBrush(Qt::NoBrush);
     const int inner=m_labelColor.isValid()?475:213;
-    for (int r=inner;r<488;r+=4) {
-        p->setPen(QPen(QColor(180,185,195,(r%12==1)?26:12),.85));p->drawEllipse(center,r,r);
-        p->setPen(QPen(QColor(0,0,0,75),1));p->drawEllipse(center,r+1.5,r+1.5);
+    QRandomGenerator grooveSpacing(44);
+    for (double r=inner;r<488;r+=2.6+grooveSpacing.generateDouble()*1.8) {
+        p->setPen(QPen(QColor(180,185,195,12+grooveSpacing.bounded(16)),.65));p->drawEllipse(center,r,r);
+        p->setPen(QPen(QColor(0,0,0,90),.9));p->drawEllipse(center,r+1.1,r+1.1);
     }
+    p->setPen(QPen(QColor(1,2,3,180),3));p->drawEllipse(center,492,492);
+    p->setPen(QPen(QColor(150,163,174,55),.8));p->drawEllipse(center,495,495);
     if(!m_labelColor.isValid()) {
         for(int r:{242,310,381,452}) { p->setPen(QPen(QColor(2,3,5,115),3));p->drawEllipse(center,r,r); }
     }
@@ -163,7 +168,12 @@ void Disc::paintVinyl(QPainter *p) {
     }
     p->restore();
     p->setBrush(Qt::NoBrush);p->setPen(QPen(QColor(0,0,0,120),3));p->drawEllipse(center,radius+1,radius+1);
-    if(!m_labelColor.isValid()) {p->setPen(QPen(QColor(255,255,255,32),1));p->drawEllipse(center,178,178);}
+    if(!m_labelColor.isValid()) {
+        // Pressed paper has a shallow concentric label ridge around the spindle.
+        p->setPen(QPen(QColor(0,0,0,85),1.8));p->drawEllipse(center,72,72);
+        p->setPen(QPen(QColor(255,255,255,28),.9));p->drawEllipse(center,74,74);
+        p->setPen(QPen(QColor(255,255,255,32),1));p->drawEllipse(center,178,178);
+    }
     p->setPen(QPen(QColor(0,0,0,170),3));p->drawEllipse(center,18,18);
     p->setPen(QPen(QColor(255,255,255,40),1));p->drawEllipse(center,21,21);
 }

@@ -6,7 +6,7 @@ Item {
     objectName: "vinylTonearm"
     required property var app
     readonly property bool motion: app.animate && visible && app.visible && native.exposed
-    readonly property bool engaged: visible && app.deckPlayer.count > 0 && (app.deckPlayer.playing || landing)
+    readonly property bool engaged: visible && app.deckPlayer.count > 0 && ((app.deckPlayer.playing && !app.swapRunning) || landing)
     readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool dragging: false
     property real dragAngle: -4
@@ -84,10 +84,22 @@ Item {
             return arm.app.recordMap ? "Drag to choose an album track · Shift for precision" : "Drag to seek · Shift for precision"
         }
     }
+    Rectangle {
+        x: 377; y: 105; width: 14; height: 35; radius: 5
+        visible: arm.app.bodyVisible
+        color: arm.app.surface; border.width: 1; border.color: arm.shade
+        rotation: -4
+    }
     // The pivot rests at the record's edge; the stylus stays outside the label.
     Item {
         x: 378; y: 100
-        Rectangle { x: -15; y: -13; width: 30; height: 30; radius: 15; color: "#50000000" }
+        Rectangle { x: -21; y: -17; width: 42; height: 42; radius: 21; color: "#80000000" }
+        Rectangle {
+            x: -19; y: -19; width: 38; height: 38; radius: 19
+            gradient: Gradient { GradientStop { position: 0; color: "#a0a5a5" } GradientStop { position: .12; color: "#555c5e" } GradientStop { position: .6; color: "#252a2e" } GradientStop { position: 1; color: "#101619" } }
+            border.width: .8; border.color: "#747b7b"
+            Rectangle { anchors.centerIn: parent; width: 31; height: 31; radius: 15.5; color: "#252b2d"; border.width: 1; border.color: "#121718" }
+        }
         Rectangle {
             x: -13; y: -13; width: 26; height: 26; radius: 13
             color: arm.app.surface; border.width: 1; border.color: arm.shade
@@ -97,6 +109,26 @@ Item {
             objectName: "tonearmShaft"
             rotation: arm.armAngle
             transformOrigin: Item.TopLeft
+            Rectangle { visible: arm.app.bodyVisible; x: -3; y: -47; width: 6; height: 39; radius: 2; color: arm.shade }
+            Rectangle {
+                objectName: "tonearmCounterweight"
+                visible: arm.app.bodyVisible
+                x: -15; y: -45; width: 30; height: 27; radius: 5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0; color: "#242b2e" }
+                    GradientStop { position: .16; color: "#737b7d" }
+                    GradientStop { position: .34; color: "#c0c6c6" }
+                    GradientStop { position: .65; color: "#6e7678" }
+                    GradientStop { position: 1; color: "#1c2326" }
+                }
+                border.width: .7; border.color: "#7a8486"
+                Repeater {
+                    model: 7
+                    Rectangle { required property int index; x: 2; y: 3+index*3; width: 26; height: .6; color: "#70000000" }
+                }
+                Rectangle { x: 1; y: 23; width: 28; height: 3; radius: 1; color: "#262d30" }
+            }
             // A displaced hard shadow makes the lift legible without a blur pass.
             Rectangle { x: 1 + (1 - arm.lowered) * 2; y: 5; width: 7; height: 187; radius: 3.5; color: "#48000000" }
             Rectangle { x: (1 - arm.lowered) * 2; y: 188; width: 14; height: 24; radius: 4; color: "#48000000" }
@@ -125,7 +157,14 @@ Item {
                 border.width: 1; border.color: arm.gold
                 Rectangle { x: 4; y: 5; width: 6; height: 2; radius: 1; color: arm.gold }
                 Rectangle { x: 4; y: 10; width: 6; height: 2; radius: 1; color: arm.gold }
-                Rectangle { x: 6; y: 23; width: 2; height: 5; radius: 1; color: arm.glint }
+                Rectangle { x: 2; y: 18; width: 10; height: 5; radius: 1; color: "#171b1d" }
+                Rectangle { x: 6; y: 23; width: 1.2; height: 5; radius: .6; color: "#d5dcde" }
+                Rectangle { x: 5.5; y: 27; width: 2; height: 1.5; radius: .5; color: "#d6c5a8" }
+                Rectangle { x: 12; y: 4; width: 9; height: 2; radius: 1; rotation: -20; color: arm.gold }
+                Repeater {
+                    model: 2
+                    Rectangle { required property int index; x: 2+index*8; y: 2; width: 2; height: 2; radius: 1; color: "#d1d4ca" }
+                }
             }
 
         }

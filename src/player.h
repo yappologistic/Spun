@@ -23,8 +23,11 @@ struct ImportedTracks { QList<Track> tracks; QString firstPath; };
 class Player : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
+    Q_PROPERTY(bool cd500Rpm READ cd500Rpm WRITE setCd500Rpm NOTIFY settingsChanged)
     Q_PROPERTY(int vinylSpeed READ vinylSpeed WRITE setVinylSpeed NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylAlbumMode READ vinylAlbumMode WRITE setVinylAlbumMode NOTIFY settingsChanged)
+    Q_PROPERTY(bool showPlayerBody READ showPlayerBody WRITE setShowPlayerBody NOTIFY settingsChanged)
+    Q_PROPERTY(QString cassetteFinish READ cassetteFinish WRITE setCassetteFinish NOTIFY settingsChanged)
     Q_PROPERTY(bool horizontalSeek READ horizontalSeek WRITE setHorizontalSeek NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylCrackle READ vinylCrackle WRITE setVinylCrackle NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylStatic READ vinylStatic WRITE setVinylStatic NOTIFY settingsChanged)
@@ -62,9 +65,15 @@ public:
     explicit Player(const QString &settingsPath, QObject *parent = nullptr);
     ~Player() override;
     QString trackKey() const { return currentUrl().toString(); }
+    bool cd500Rpm() const { return m_cd500Rpm; }
+    void setCd500Rpm(bool value);
     int vinylSpeed() const { return m_vinylSpeed; }
     bool horizontalSeek() const { return m_horizontalSeek; }
     bool vinylCrackle() const { return m_vinylCrackle; }
+    bool showPlayerBody() const { return m_showPlayerBody; }
+    void setShowPlayerBody(bool value);
+    QString cassetteFinish() const { return m_cassetteFinish; }
+    void setCassetteFinish(const QString &value);
     bool vinylStatic() const { return m_vinylStatic; }
     bool vinylSkips() const { return m_vinylSkips; }
     void setVinylSpeed(int value);
@@ -182,8 +191,11 @@ private:
     QSet<QString> m_shuffleVisited;
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
+    bool m_cd500Rpm=false;
     int m_vinylSpeed=33;
     bool m_vinylAlbumMode=false;
+    bool m_showPlayerBody=true;
+    QString m_cassetteFinish="smoke";
     bool m_horizontalSeek=false, m_vinylCrackle=false, m_vinylStatic=false, m_vinylSkips=false;
     bool m_cassetteSounds=true;
     QString m_medium = "cd";

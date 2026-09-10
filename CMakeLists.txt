@@ -42,7 +42,7 @@ qt_add_library(spun_core STATIC
     src/listening.cpp src/listening.h src/tapesound.cpp src/tapesound.h src/vinylnoise.cpp src/vinylnoise.h
     src/musicactions.cpp src/musicactions.h
     src/library.cpp src/library.h src/lyrics.cpp src/lyrics.h src/artwork.cpp src/artwork.h
-    src/player.cpp src/player.h src/disc.cpp src/disc.h src/mpris.cpp src/mpris.h
+    src/player.cpp src/player.h src/disc.cpp src/disc.h src/playerbody.cpp src/playerbody.h src/mpris.cpp src/mpris.h
     src/theme.cpp src/theme.h src/cider.cpp src/cider.h src/ciderevents.cpp src/ciderevents.h)
 target_link_libraries(spun_core PUBLIC Qt6::Core Qt6::Gui Qt6::Quick Qt6::Qml Qt6::QuickControls2
     Qt6::Svg Qt6::Multimedia Qt6::Concurrent Qt6::DBus Qt6::Network PkgConfig::TAGLIB)

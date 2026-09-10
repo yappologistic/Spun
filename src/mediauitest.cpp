@@ -1,5 +1,7 @@
 #include "mediauitest.h"
 #include "player.h"
+#include "disc.h"
+#include <QQmlContext>
 #include <QQuickWindow>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
@@ -30,7 +32,7 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         auto grab=window->contentItem()->grabToImage();
         check(grab&&wait([&]{return !grab->image().isNull();})&&grab->image().save(captures+"/"+name+".png"),"media capture saved");
     };
-    player.setVolume(0);player.setMotion(false);window->setProperty("useCider",false);
+    player.setShowPlayerBody(true);player.setVolume(0);player.setMotion(false);window->setProperty("useCider",false);
     QList<QUrl> files;
     for(int i=0;i<3;++i){
         const auto path=temp+QString("/record-%1.flac").arg(i);
@@ -82,5 +84,87 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
     check(item("cassetteReel0")&&window->mask().contains(QPoint(window->width()/2,window->height()/2)),"Mini cassette keeps its reels inside the native input mask");
     player.setMotion(false);const double stopped=window->property("cassetteLeftAngle").toDouble();QTest::qWait(100);
     check(window->property("cassetteLeftAngle").toDouble()==stopped,"reduced motion freezes cassette winding");
+    player.setMiniMode(false);player.setVinylAlbumMode(false);player.pause();
+    const auto deckPos=item("playerDeck")->mapToScene(QPointF());
+    const auto barPos=item("sourceBar")->mapToScene(QPointF());
+    for(const auto &medium:QStringList{"cd","vinyl","cassette"}) {
+        player.setMedium(medium);player.setShowPlayerBody(true);QTest::qWait(200);
+        check(item("playerBody")&&item("playerBody")->isVisible(),"full mode shows the selected player housing");
+        check(item("playerDeck")->mapToScene(QPointF())==deckPos&&item("sourceBar")->mapToScene(QPointF())==barPos,"hardware keeps the existing playback and source controls aligned");
+        capture("body-"+medium);
+        window->setProperty("discFlipped",true);QTest::qWait(100);capture("booklet-"+medium);
+        check(!item("playerLid")->isVisible(),"album booklet keeps the lid away from track and lyric controls");
+        check(item("albumTrackList")->height()>140,"album booklet gives tracks a full reading area");
+        check(item("discBackFooter")->mapToScene(QPointF(0,36)).y()<item("albumBooklet")->mapToScene(QPointF(0,400)).y(),"booklet footer stays inside the physical case with bottom padding");
+        check(item("cassetteSeek")->isVisible()&&!item("progressRing")->isVisible(),"booklet uses a horizontal seek bar within the case");
+        const auto bookSeek=item("cassetteSeek")->mapToScene(QPointF(80,18)).toPoint();
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,bookSeek);
+        check(wait([&]{return qAbs(player.position()-player.duration()*.25)<1200;}),"booklet progress bar seeks the current song");
+        window->setProperty("discFlipped",false);
+        player.setShowPlayerBody(false);QTest::qWait(50);
+        check(!item("playerBody")->isVisible()&&window->property("mediumScale").toDouble()==1.,"body toggle restores the original medium geometry");
+        player.setShowPlayerBody(true);player.setMiniMode(true);QTest::qWait(80);
+        check(!item("playerBody")->isVisible(),"Mini mode retains its compact silhouette");player.setMiniMode(false);
+    }
+    player.setMedium("cassette");
+    for(const auto &finish:QStringList{"clear","smoke","cream"}) { player.setCassetteFinish(finish);QTest::qWait(100);capture("cassette-"+finish); }
+    player.setCassetteFinish("invalid");check(player.cassetteFinish()=="cream","invalid cassette finishes cannot replace the saved selection");
+    {Player restored(temp+"/player.ini");check(restored.showPlayerBody()&&restored.cassetteFinish()=="cream","player body and cassette finish preferences survive relaunch");}
+    auto *typography=qmlContext(window)->contextProperty("typography").value<QObject*>();
+    player.setMedium("vinyl");
+    for(double zoom:{.85,1.,1.5}) {
+        typography->setProperty("uiScale",zoom);QTest::qWait(100);
+        auto *scrub=item("scrubber");const auto point=scrub->mapToScene(QPointF(436,220)).toPoint();
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point);
+        check(wait([&]{return qAbs(player.position()-player.duration()*.25)<700;}),"scaled player housing preserves accurate circular seeking");
+    }
+    typography->setProperty("uiScale",1.);QTest::qWait(100);
+    check(item("tonearmLoader")->z()>item("progressRing")->z(),"tonearm hardware occludes the waveform instead of being crossed by it");
+    QTest::mouseMove(window,QPoint(25,15));
+    player.setMotion(true);player.play();QTest::qWait(200);capture("vinyl-playing");player.pause();
+
+    auto *presentation=qobject_cast<DiscPresentation*>(qmlContext(window)->contextProperty("presentation").value<QObject*>());
+    int swaps=0;QObject::connect(presentation,&DiscPresentation::swapRequested,presentation,[&]{++swaps;});
+    player.setMotion(true);player.setMedium("cd");
+    check(!player.cd500Rpm()&&window->property("cdDegreesPerSecond").toDouble()==9,"CD retains its gentle rotation by default");
+    auto *preferences=window->findChild<QObject*>("preferencesPopup");
+    if(preferences)QMetaObject::invokeMethod(preferences,"open");
+    QTest::qWait(220);
+    auto *speedToggle=item("cd500RpmToggle");
+    check(speedToggle&&speedToggle->isVisible(),"CD preferences expose the 500 RPM toggle");
+    if(speedToggle)QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,speedToggle->mapToScene(QPointF(speedToggle->width()-32,speedToggle->height()/2)).toPoint());
+    check(player.cd500Rpm(),"clicking the CD speed toggle enables fast rotation");QTest::qWait(300);capture("cd-speed-settings");
+    player.setMedium("vinyl");QTest::qWait(30);
+    check(speedToggle&&!speedToggle->isVisible()&&window->property("spinSpeed").toDouble()==0,"CD setting stays hidden in vinyl mode and does not carry over its rotation");
+    player.setMedium("cd");if(preferences)QMetaObject::invokeMethod(preferences,"close");QTest::qWait(220);
+    check(window->property("cdDegreesPerSecond").toDouble()==3000,"500 RPM converts to 3000 degrees per second");
+    {Player restored(temp+"/player.ini");check(restored.cd500Rpm(),"CD speed preference survives relaunch");}
+    player.play();
+    if(window->isExposed())check(wait([&]{return window->property("spinSpeed").toDouble()>2900;}),"playing CD accelerates to the selected 500 RPM");
+    else {const auto angle=window->property("spinAngle");QTest::qWait(80);check(window->property("spinAngle")==angle,"hidden 500 RPM CD does not animate");}
+    player.setMotion(false);const auto cdAngle=window->property("spinAngle");QTest::qWait(80);
+    check(window->property("spinAngle")==cdAngle,"reduced motion freezes the 500 RPM CD");
+    player.pause();player.setCd500Rpm(false);player.setMotion(true);
+
+    presentation->present(player.artwork(),"fixture-album-one",false);
+    presentation->present(player.artwork(),"fixture-album-two",true);QTest::qWait(150);
+    if(window->isExposed())check(window->property("swapRunning").toBool()&&window->property("packageOpacity").toDouble()>0,"album exchange presents its packaging and opens the lid");
+    capture("album-loading");
+    player.play();check(wait([&]{return player.playing();}),"packaging animation never delays playback");player.pause();
+    presentation->present(player.artwork(),"fixture-album-two",true);
+    check(swaps==1,"same-album updates do not exchange the physical medium");
+    player.setMotion(false);QTest::qWait(30);
+    check(!window->property("swapRunning").toBool()&&window->property("lidOpen").toDouble()==0,"reduced motion interrupts loading and closes the lid");
+    QObject::disconnect(presentation,&DiscPresentation::swapRequested,presentation,nullptr);
+    QFile palette(temp+"/config/gtk-4.0/noctalia.css");
+    if(palette.open(QIODevice::ReadOnly)) {
+        const auto original=palette.readAll();palette.close();auto light=original;
+        light.replace("#17191f","#f6f0e8").replace("#eee5dc","#342d29").replace("#e6b599","#8b492d").replace("#392619","#ffffff").replace("#24252b","#e9e0d5");
+        if(palette.open(QIODevice::WriteOnly|QIODevice::Truncate)){palette.write(light);palette.close();}
+        check(wait([&]{return window->property("surface").value<QColor>().lightness()>128;}),"physical housings follow the light Noctalia palette");
+        for(const auto &medium:QStringList{"cd","vinyl","cassette"}){player.setMedium(medium);QTest::qWait(100);capture("light-"+medium);}
+        if(palette.open(QIODevice::WriteOnly|QIODevice::Truncate)){palette.write(original);palette.close();}
+    }
+
     std::cout<<"MEDIA UI RESULT "<<failures<<" failures"<<std::endl;return failures?1:0;
 }
