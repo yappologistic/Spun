@@ -72,6 +72,8 @@ Listening::Listening(Cider *cider,QObject *parent):QObject(parent),m_cider(cider
         if(m_remember && valid && !tracks.isEmpty() && position>=0 && position<tracks.first().toMap().value("duration").toLongLong())
             m_session={{"tracks",tracks},{"position",position},{"savedAt",saved.value("savedAt").toString().left(40)}};
     }
+    m_recordTimeout.setSingleShot(true);m_recordTimeout.setInterval(15000);
+    connect(&m_recordTimeout,&QTimer::timeout,this,[this]{if(m_recordOperation)finish("Cider did not confirm the album position in time.",true);});
     m_checkpoint.setInterval(15000);m_saveDelay.setInterval(700);m_saveDelay.setSingleShot(true);
     connect(&m_checkpoint,&QTimer::timeout,this,&Listening::checkpoint);
     connect(&m_saveDelay,&QTimer::timeout,this,&Listening::checkpoint);
@@ -108,8 +110,9 @@ void Listening::setRememberSession(bool enabled) {
 }
 void Listening::request(const QByteArray &method,const QString &path,const QJsonObject &body,std::function<void(bool,QJsonObject)> done,bool quiet) {
     const auto guard=QPointer<Listening>(this);const int generation=m_cider->m_tokenGeneration;
-    m_cider->apiRequest(method,path,body,[guard,generation,done](bool ok,QJsonObject data) {
-        if(!guard)return;
+    const bool operation=m_busy;const auto operationGeneration=m_operationGeneration;
+    m_cider->apiRequest(method,path,body,[guard,generation,done,operation,operationGeneration](bool ok,QJsonObject data) {
+        if(!guard || (operation && (!guard->m_busy || operationGeneration!=guard->m_operationGeneration)))return;
         if(generation!=guard->m_cider->m_tokenGeneration || (guard->m_busy && guard->m_tokenGeneration!=generation))ok=false;
         done(ok,data.value("data").toObject());
     },!quiet);
@@ -118,10 +121,11 @@ bool Listening::begin() {
     if(m_busy || m_cider->controlBusy() || m_cider->queueBusy() || m_cider->m_apiToken.isEmpty() || m_cider->recovering()) {
         emit feedback("Wait for Cider to connect and finish its current action.",true);return false;
     }
-    m_busy=true;m_error.clear();m_cider->m_listeningBusy=true;m_tokenGeneration=m_cider->m_tokenGeneration;
+    ++m_operationGeneration;m_busy=true;m_error.clear();m_cider->m_listeningBusy=true;m_tokenGeneration=m_cider->m_tokenGeneration;
     emit m_cider->controlChanged();emit changed();return true;
 }
 void Listening::finish(const QString &message,bool error) {
+    m_recordTimeout.stop();m_recordOperation=false;m_recordLoading=false;m_recordTracks.clear();
     m_inserting=false;m_restoring=false;if(!error)m_preparing=false;m_busy=false;m_target.clear();m_error=error?message:QString();
     m_cider->m_listeningBusy=false;emit m_cider->controlChanged();emit changed();emit feedback(message,error);
 }
@@ -152,18 +156,36 @@ void Listening::playBookmark(const QString &key) {
     }
     emit feedback("This bookmark is no longer available.",true);
 }
+void Listening::cancelAlbumPosition() { if(m_recordOperation)finish("Album selection cancelled"); }
+bool Listening::playAlbumPosition(const QString &albumId, const QVariantList &tracks, int index, qint64 position) {
+    if (!QRegularExpression("^[0-9]{1,30}$").match(albumId).hasMatch() || tracks.size()<2 || tracks.size()>500 || index<0 || index>=tracks.size()) return false;
+    QVariantList clean;
+    for (const auto &value : tracks) {
+        const auto row = cleanTrack(value.toMap());
+        if (row.isEmpty() || row.value("duration").toLongLong()<=0) return false;
+        clean.append(row);
+    }
+    if (position<0 || position>=clean[index].toMap().value("duration").toLongLong() || !begin()) return false;
+    m_recordTimeout.start();m_recordOperation=true;m_recordTracks=clean;m_recordIndex=index;m_target=clean[index].toMap();m_targetPosition=position;m_recordAttempts=12;
+    request("POST","/playback/play-collection",{{"type","albums"},{"id",albumId},{"shuffle",false}},[this](bool ok,QJsonObject) {
+        if (!ok) { finish("Cider could not start this album.",true); return; }
+        m_recordLoading=true;
+        QTimer::singleShot(250,this,[this] { if (m_recordLoading) m_cider->refreshQueue(); });
+    });
+    return true;
+}
 void Listening::playAt(const QVariantMap &track,qint64 position,bool fromQueue) {
     m_target=track;m_targetPosition=position;
     request("POST",fromQueue?"/queue/jump":"/playback/play-item",fromQueue?QJsonObject{{"index",0}}:QJsonObject{{"type",track.value("type").toString()},{"id",track.value("id").toString()}},[this](bool ok,QJsonObject) {
         if(!ok) {finish("Playback wasn’t confirmed. Check Cider before retrying.",true);return;}
-        QTimer::singleShot(250,this,[this]{verifyPlaying(12);});
+        QTimer::singleShot(250,this,[this,generation=m_operationGeneration]{if(m_busy && generation==m_operationGeneration)verifyPlaying(12);});
     });
 }
 void Listening::verifyPlaying(int attempts) {
     request("GET","/playback",{},[this,attempts](bool ok,QJsonObject data) {
         if(!ok) {finish("Couldn’t verify the playing song; its position was left unchanged.",true);return;}
         if(identity(snapshotTrack(data))!=identity(m_target)) {
-            if(attempts>0)QTimer::singleShot(250,this,[this,attempts]{verifyPlaying(attempts-1);});
+            if(attempts>0)QTimer::singleShot(250,this,[this,attempts,generation=m_operationGeneration]{if(m_busy && generation==m_operationGeneration)verifyPlaying(attempts-1);});
             else finish("Cider didn’t start the expected song; its position was left unchanged.",true);
             return;
         }
@@ -171,7 +193,7 @@ void Listening::verifyPlaying(int attempts) {
         if(duration<=0 || m_targetPosition>=duration*1000) {finish("The saved position is outside this version of the song.",true);return;}
         request("POST","/playback/seek",{{"position",m_targetPosition/1000.0}},[this](bool success,QJsonObject) {
             if(!success) {finish("Song opened, but Cider couldn’t confirm the saved position.",true);return;}
-            QTimer::singleShot(350,this,&Listening::verifySeek);
+            QTimer::singleShot(350,this,[this,generation=m_operationGeneration]{if(m_busy && generation==m_operationGeneration)verifySeek();});
         });
     });
 }
@@ -179,7 +201,7 @@ void Listening::verifySeek() {
     request("GET","/playback",{},[this](bool ok,QJsonObject data) {
         const double position=data.value("time").toObject().value("currentTime").toDouble(-1)*1000;
         const bool verified=ok && identity(snapshotTrack(data))==identity(m_target) && qAbs(position-m_targetPosition)<2000;
-        finish(verified?"Resumed from saved position":"Cider hasn’t confirmed the saved position. Check playback before retrying.",!verified);
+        finish(verified?(m_recordOperation?"Needle positioned":"Resumed from saved position"):"Cider hasn’t confirmed the saved position. Check playback before retrying.",!verified);
         m_cider->refresh();m_cider->refreshQueue();
     });
 }
@@ -222,6 +244,23 @@ void Listening::restoreSession() {
     m_cider->refreshQueue();
 }
 void Listening::queueUpdated() {
+    if (m_recordLoading && !m_cider->queueBusy()) {
+        if (m_tokenGeneration!=m_cider->m_tokenGeneration || !m_cider->queueReady() || !m_cider->queueError().isEmpty()) { finish("Could not verify the album queue.",true); return; }
+        const auto rows=m_cider->queue();
+        bool same=rows.size()>=m_recordTracks.size();
+        for(int i=0;same && i<m_recordTracks.size();++i) same=identity(rows[i].toMap())==identity(m_recordTracks[i].toMap());
+        if (!same) {
+            if (--m_recordAttempts>0) QTimer::singleShot(250,this,[this]{ if(m_recordLoading)m_cider->refreshQueue(); });
+            else finish("The album queue changed. The needle position was not applied.",true);
+            return;
+        }
+        m_recordLoading=false;
+        request("POST","/queue/jump",{{"index",m_recordIndex}},[this](bool ok,QJsonObject) {
+            if (!ok) { finish("Cider could not select that album track.",true); return; }
+            QTimer::singleShot(250,this,[this,generation=m_operationGeneration]{if(m_busy && generation==m_operationGeneration)verifyPlaying(12);});
+        });
+        return;
+    }
     if(m_restoring && !m_cider->m_controlBusy && !m_cider->queueBusy()) {
         if(m_tokenGeneration!=m_cider->m_tokenGeneration || !m_cider->queueReady() || !m_cider->queueError().isEmpty()) {finish("Couldn’t verify Cider’s queue. Nothing else was changed.",true);return;}
         const auto tracks=m_session.value("tracks").toList();const auto queue=m_cider->queue();

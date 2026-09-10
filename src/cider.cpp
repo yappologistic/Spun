@@ -132,8 +132,11 @@ void Cider::apply(const QVariantMap &v) {
         if (url != m_artUrl) loadArt(url);
     }
     if (v.contains("PlaybackStatus")) {
-        const bool isPlaying = unwrap(v.value("PlaybackStatus")).toString() == "Playing";
-        if (isPlaying != m_playing) {
+        const auto status = unwrap(v.value("PlaybackStatus")).toString();
+        const bool isPlaying = status == "Playing";
+        const bool statusChanged = m_playbackStatus != status;
+        m_playbackStatus = status;
+        if (isPlaying != m_playing || statusChanged) {
             m_position = metadataChanged ? 0 : previousPosition;
             m_playing = isPlaying; m_clock.restart();
             if (m_playing) m_tick.start(); else m_tick.stop();
@@ -159,9 +162,11 @@ void Cider::apply(const QVariantMap &v) {
     }
     if (v.contains("Shuffle")) { bool shuffle = unwrap(v.value("Shuffle")).toBool(); if (shuffle != m_shuffle) { m_shuffle=shuffle; emit settingsChanged(); } }
     if (v.contains("LoopStatus")) { int repeat = qMax(0, QStringList{"None","Playlist","Track"}.indexOf(unwrap(v.value("LoopStatus")).toString())); if (repeat != m_repeat) { m_repeat=repeat; emit settingsChanged(); } }
+    const bool oldSeek=m_canSeek, oldNext=m_canNext, oldPrevious=m_canPrevious;
     if (v.contains("CanSeek")) m_canSeek = unwrap(v.value("CanSeek")).toBool();
     if (v.contains("CanGoNext")) m_canNext = unwrap(v.value("CanGoNext")).toBool();
     if (v.contains("CanGoPrevious")) m_canPrevious = unwrap(v.value("CanGoPrevious")).toBool();
+    if (!metadataChanged && (oldSeek!=m_canSeek || oldNext!=m_canNext || oldPrevious!=m_canPrevious)) emit trackChanged();
     if (metadataChanged) { emit trackChanged(); if (m_queueVisible || m_libraryVisible) refreshQueue(); if (m_discVisible) refreshDisc(); }
 }
 void Cider::propertiesChanged(const QString &interface, const QVariantMap &values, const QStringList &invalidated) {
@@ -173,7 +178,7 @@ void Cider::seeked(qlonglong value) {
         if(m_desktopPosition!=m_staleDesktopPosition) {m_staleDesktopPosition=m_desktopPosition;confirmSeek(m_track,m_seekGeneration,-1,0);}
         return;
     }
-    m_positionFromApi=false;m_position=m_desktopPosition;m_clock.restart();emit positionChanged();
+    m_positionFromApi=false;m_position=m_desktopPosition;m_clock.restart();emit positionChanged();emit positionDiscontinuity(m_position);
 }
 void Cider::call(const QString &method, const QVariantList &args) {
     if (!m_available) { raise(); return; }
@@ -241,7 +246,7 @@ void Cider::confirmSeek(const QString &track,int generation,qint64 target,int at
             // Some Cider versions leave MPRIS Position unchanged after a seek.
             // Keep the confirmed time until that desktop value changes again.
             m_staleDesktopPosition=m_desktopPosition;m_positionFromApi=true;
-            m_position=actual;m_clock.restart();emit positionChanged();return;
+            m_position=actual;m_clock.restart();emit positionChanged();emit positionDiscontinuity(actual);return;
         }
         if(ok && attempts>0) {QTimer::singleShot(250,this,[this,track,generation,target,attempts]{confirmSeek(track,generation,target,attempts-1);});return;}
         emit apiFeedback("Cider hasn’t confirmed the seek position. Check playback before trying again.",true);
@@ -615,7 +620,7 @@ void Cider::refreshDisc() {
         if (m_discAlbumPath==m_discCachePath && !m_discCache.isEmpty()) {
             m_discDetails=m_discCache; m_discDetails["currentId"]=currentId; m_discLoading=false; emit discDetailsChanged(); return;
         }
-        m_pendingDisc["currentId"]=currentId;
+        m_pendingDisc["currentId"]=currentId; m_pendingDisc["albumId"]=match.captured(2);
         requestDiscJson("/api/v1/amapi/run-v3",{{"path",m_discAlbumPath+"?include=tracks"}},generation,[this,generation](QJsonObject response) {
             const auto records=response.value("data").toObject().value("data").toArray();
             if (records.isEmpty()) { failDisc("Album details unavailable. Try again."); return; }
@@ -638,7 +643,7 @@ void Cider::requestDiscTracks(const QString &path, int generation) {
         auto tracks=m_pendingDisc.value("tracks").toList();
         for (const auto &value:page.value("data").toArray()) {
             const auto song=value.toObject(), attr=song.value("attributes").toObject();
-            tracks.append(QVariantMap{{"id",song.value("id").toString()},{"title",attr.value("name").toString()},
+            tracks.append(QVariantMap{{"id",song.value("id").toString()},{"type","songs"},{"playable",!attr.value("playParams").toObject().isEmpty()},{"title",attr.value("name").toString()},
                 {"artist",attr.value("artistName").toString()},{"number",attr.value("trackNumber").toInt()},
                 {"disc",attr.value("discNumber").toInt(1)},{"duration",attr.value("durationInMillis").toDouble()}});
         }

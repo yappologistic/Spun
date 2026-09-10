@@ -43,6 +43,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     if(!QStringList{"cd","vinyl","cassette"}.contains(m_medium))m_medium="cd";
     m_vinylSpeed=m_settings.value("vinylSpeed",33).toInt();
     if(m_vinylSpeed!=0&&m_vinylSpeed!=33&&m_vinylSpeed!=45)m_vinylSpeed=33;
+    m_vinylAlbumMode=m_settings.value("vinylAlbumMode",false).toBool();
     m_horizontalSeek=m_settings.value("horizontalSeek",false).toBool();
     m_vinylCrackle=m_settings.value("vinylCrackle",false).toBool();
     m_vinylStatic=m_settings.value("vinylStatic",false).toBool();
@@ -112,6 +113,7 @@ void Player::ensureMedia() {
             const auto pos = m_restorePosition;
             m_restorePosition = -1;
             m_media->setPosition(qBound<qint64>(0, pos, duration()));
+            emit seeked(position());
         }
         if (status == QMediaPlayer::EndOfMedia) next(true);
     });
@@ -345,9 +347,33 @@ void Player::stop() {
     if (pending) emit playingChanged();
     emit positionChanged();
 }
-void Player::next(bool automatic) {
+void Player::setVinylAlbumMode(bool value) {
+    if (m_vinylAlbumMode == value) return;
+    m_vinylAlbumMode = value; if (value) m_shuffle = false; emit settingsChanged(); save();
+}
+bool Player::playAlbumPosition(const QString &path, qint64 position) {
+    if (!m_vinylAlbumMode || !vinyl()) return false;
+    for (const auto &value : discDetails().value("tracks").toList()) {
+        const auto row = value.toMap();
+        if (row.value("path").toString() != path) continue;
+        if (position < 0 || position >= row.value("duration").toLongLong()) return false;
+        select(row.value("index").toInt(), false); seek(position); play(); return true;
+    }
+    return false;
+}
+void Player::next(bool automatic, bool autoplay) {
     if (!count()) return;
     if (automatic && m_repeat == 2) { seek(0); play(); return; }
+    if (m_vinylAlbumMode && vinyl()) {
+        const auto rows = discDetails().value("tracks").toList();
+        const bool mapped = rows.size()>=2 && rows.size()<=500 && std::all_of(rows.cbegin(),rows.cend(),[](const QVariant &row){return row.toMap().value("duration").toLongLong()>0;});
+        for (int i = 0; mapped && i < rows.size(); ++i) if (rows[i].toMap().value("current").toBool()) {
+            if (i + 1 < rows.size()) select(rows[i+1].toMap().value("index").toInt(), autoplay);
+            else if (!automatic || m_repeat == 1) select(rows.first().toMap().value("index").toInt(), autoplay);
+            else stop();
+            return;
+        }
+    }
     if (m_shuffle && count() > 1) {
         QList<int> candidates;
         for (int i = 0; i < count(); ++i) if (!m_shuffleVisited.contains(m_tracks[i].path)) candidates.append(i);
@@ -357,23 +383,31 @@ void Player::next(bool automatic) {
             m_shuffleVisited.insert(m_tracks[m_index].path);
             for (int i = 0; i < count(); ++i) if (i != m_index) candidates.append(i);
         }
-        select(candidates[QRandomGenerator::global()->bounded(candidates.size())]);
+        select(candidates[QRandomGenerator::global()->bounded(candidates.size())], autoplay);
         return;
     }
-    if (m_index + 1 < count()) select(m_index + 1);
-    else if (!automatic || m_repeat == 1) select(0);
+    if (m_index + 1 < count()) select(m_index + 1, autoplay);
+    else if (!automatic || m_repeat == 1) select(0, autoplay);
     else { stop(); seek(0); }
 }
-void Player::previous() {
-    if (position() > 3000) seek(0);
-    else if (count()) select((m_index - 1 + count()) % count());
+void Player::previous(bool autoplay) {
+    if (position() > 3000) { seek(0); return; }
+    if (m_vinylAlbumMode && vinyl() && count()) {
+        const auto rows = discDetails().value("tracks").toList();
+        const bool mapped = rows.size()>=2 && rows.size()<=500 && std::all_of(rows.cbegin(),rows.cend(),[](const QVariant &row){return row.toMap().value("duration").toLongLong()>0;});
+        for (int i = 0; mapped && i < rows.size(); ++i) if (rows[i].toMap().value("current").toBool()) {
+            select(rows[(i + rows.size() - 1) % rows.size()].toMap().value("index").toInt(), autoplay); return;
+        }
+    }
+    if (count()) select((m_index - 1 + count()) % count(), autoplay);
 }
 void Player::seek(qint64 milliseconds) {
     const auto pos = qBound<qint64>(0, milliseconds, duration());
     if (!m_media || m_media->mediaStatus() == QMediaPlayer::LoadingMedia) {
         m_restorePosition = pos;
         emit positionChanged();
-    } else { m_restorePosition = -1; m_media->setPosition(pos); }
+        if (!m_media) emit seeked(pos);
+    } else { m_restorePosition = -1; m_media->setPosition(pos); emit seeked(position()); }
 }
 void Player::remove(int index) {
     if (index < 0 || index >= count()) return;
@@ -456,6 +490,7 @@ void Player::save() {
     m_settings.setValue("motion", m_motion);
     m_settings.setValue("cassetteSounds", m_cassetteSounds);
     m_settings.setValue("vinylSpeed",m_vinylSpeed);
+    m_settings.setValue("vinylAlbumMode",m_vinylAlbumMode);
     m_settings.setValue("horizontalSeek",m_horizontalSeek);
     m_settings.setValue("vinylCrackle",m_vinylCrackle);
     m_settings.setValue("vinylStatic",m_vinylStatic);
@@ -506,7 +541,7 @@ QVariantMap Player::discDetails() const {
     for (int i:indices) {
         const auto &t=m_tracks[i];
         tracks.append(QVariantMap{{"title",t.title},{"artist",t.artist},{"number",t.number},{"disc",t.discNumber},
-            {"duration",t.duration},{"current",i==m_index}});
+            {"duration",t.duration},{"path",t.path},{"index",i},{"current",i==m_index}});
     }
     return {{"title",current.album.isEmpty() ? "Unknown album" : current.album},
         {"artist",current.albumArtist.isEmpty() ? current.artist : current.albumArtist},

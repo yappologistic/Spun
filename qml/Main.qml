@@ -37,6 +37,7 @@ ApplicationWindow {
         if (crossfadeMenu.visible) { crossfadeMenu.service.refreshCrossfade(); crossfadeMenu.service.refreshAudioOptions() }
         if (qualityPopup.visible) root.ciderService.refreshAudioQuality()
     }
+    Connections { target: player; function onSettingsChanged() { if (!player.vinylAlbumMode || !player.vinyl) root.listeningService.cancelAlbumPosition() } }
     Connections { target: root.listeningService; function onFeedback(message, error) { root.notifyAction(message, error) } }
     Connections { target: root.ciderService; function onRemoteSettingsChanged() { root.refreshOpenCiderDetails() } }
     Timer {
@@ -68,7 +69,7 @@ ApplicationWindow {
         running: root.vinyl && player.vinylSkips && root.deckPlayer.playing && !root.needleDragging
         onTriggered: { root.skipGroove(); interval = 45000 + Math.floor(Math.random()*35000) }
     }
-    onUseCiderChanged: { cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
+    onUseCiderChanged: { if (!useCider) root.listeningService.cancelAlbumPosition(); cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
     property bool lyricsView: false
     property real swapOffset: 0
     property real outgoingOffset: 0
@@ -91,10 +92,43 @@ ApplicationWindow {
     property bool discFlipped: false
     readonly property var discDetails: deckPlayer.discDetails
     readonly property var albumTracks: discDetails.tracks || []
+    readonly property var recordMap: {
+        if (!vinyl || !player.vinylAlbumMode || albumTracks.length < 2 || albumTracks.length > 500) return null
+        let total = 0, current = -1, rows = []
+        for (let i = 0; i < albumTracks.length; ++i) {
+            const track = albumTracks[i], duration = Number(track.duration)
+            if (!isFinite(duration) || duration <= 0 || (useCider && !track.playable)) return null
+            rows.push({track: track, start: total, duration: duration, index: i})
+            if (track.current === true || (useCider && track.id === discDetails.currentId)) current = i
+            total += duration
+        }
+        if (current < 0 || (useCider && (!discDetails.albumId || ciderService.discLoading || ciderService.discError.length))) return null
+        return {rows: rows, total: total, current: current}
+    }
+    readonly property string recordKey: recordMap ? (useCider ? "cider:" : "local:") + recordMap.rows.map(row => (row.track.id || row.track.path) + ":" + row.duration).join("|") : ""
+    onRecordKeyChanged: scrubber.cancelScrub()
+    readonly property real recordProgress: recordMap ? Math.max(0, Math.min(1, (recordMap.rows[recordMap.current].start + deckPlayer.position) / recordMap.total)) : progress
+    function recordTarget(fraction) {
+        if (!recordMap) return null
+        const value = Math.max(0, Math.min(recordMap.total - 1, fraction * recordMap.total))
+        for (let i = 0; i < recordMap.rows.length; ++i) {
+            const row = recordMap.rows[i]
+            if (value < row.start + row.duration) return {track: row.track, index: row.index, position: Math.floor(value - row.start)}
+        }
+        return null
+    }
+    function dropRecordNeedle(fraction) {
+        const target = recordTarget(fraction)
+        if (!target) return false
+        const accepted = useCider ? listeningService.playAlbumPosition(discDetails.albumId, albumTracks, target.index, target.position)
+                                  : player.playAlbumPosition(target.track.path, target.position)
+        if (!accepted) notifyAction("This album position is not available. Try again when playback is ready.", true)
+        return accepted
+    }
+    Binding { target: root.ciderService; property: "discVisible"; value: root.useCider && (root.discFlipped || (root.vinyl && player.vinylAlbumMode && root.visible && root.visibility !== Window.Minimized)) }
     onDiscFlippedChanged: {
         cancelSeekPreview(); scrubber.cancelScrub()
         stopSwap()
-        root.ciderService.discVisible = discFlipped && useCider
         syncLyrics()
     }
     function flipDisc() { if (deckPlayer.count > 0) discFlipped = !discFlipped }
@@ -437,8 +471,8 @@ ApplicationWindow {
             if (root.cassette && !root.discFlipped && (root.deckPlayer.playing || winding || Math.abs(root.tapeWindSpeed) > .5)) {
                 const position = Math.max(0, Math.min(1, root.cassetteVisualProgress))
                 const speed = winding || Math.abs(root.tapeWindSpeed) > .5 ? root.tapeWindSpeed * 55 : 10000
-                root.cassetteLeftAngle = (root.cassetteLeftAngle + dt * speed / Math.sqrt(1936 + 3993 * (1-position))) % 360
-                root.cassetteRightAngle = (root.cassetteRightAngle + dt * speed / Math.sqrt(1936 + 3993 * position)) % 360
+                root.cassetteLeftAngle = (root.cassetteLeftAngle - dt * speed / Math.sqrt(1936 + 3993 * (1-position))) % 360
+                root.cassetteRightAngle = (root.cassetteRightAngle - dt * speed / Math.sqrt(1936 + 3993 * position)) % 360
             }
             if (root.deckPlayer.playing) root.wavePhase=(root.wavePhase+dt*2.8)%(2*Math.PI)
         }
@@ -598,6 +632,24 @@ ApplicationWindow {
                         rotation: root.cassette ? 0 : root.spinAngle
                     }
                     Disc { visible: !root.cassette; cassette: root.cassette; shellColor: root.surface; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                    Loader {
+                        anchors.fill: parent; active: root.recordMap !== null
+                        sourceComponent: Canvas {
+                            objectName: "albumGrooves"
+                            property var map: root.recordMap
+                            onMapChanged: requestPaint()
+                            onPaint: {
+                                const ctx = getContext("2d"); ctx.reset()
+                                if (!map) return
+                                ctx.strokeStyle = "#657b7b7b"; ctx.lineWidth = 1.5
+                                for (let i = 1; i < map.rows.length; ++i) {
+                                    const angle = (6 + 20 * map.rows[i].start / map.total) * Math.PI / 180
+                                    const radius = Math.hypot(173 - 197 * Math.sin(angle), -105 + 197 * Math.cos(angle))
+                                    ctx.beginPath(); ctx.arc(205, 205, radius, 0, 2 * Math.PI); ctx.stroke()
+                                }
+                            }
+                        }
+                    }
                     Loader { objectName: "cassetteReelsLoader"; anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root } }
                 }
                 back: Item {
@@ -975,7 +1027,7 @@ ApplicationWindow {
             objectName: "progressRing"
             anchors.fill: parent
             visible: !root.cassette && root.deckPlayer.count > 0
-            progress: scrubber.scrubbing ? scrubber.previewFraction : root.progress
+            progress: scrubber.scrubbing ? scrubber.previewFraction : root.recordProgress
             phase: root.wavePhase
             amplitude: root.deckPlayer.playing ? 2.8 : 0
             accent: root.accent
@@ -991,7 +1043,7 @@ ApplicationWindow {
             property bool scrubbing: false
             property real previewFraction: 0
             property real lastFraction: 0
-            readonly property bool canSeek: !root.swapRunning && root.deckPlayer.duration > 0 && (!root.useCider || root.ciderService.canSeek)
+            readonly property bool canSeek: !root.swapRunning && root.deckPlayer.duration > 0 && (!root.useCider || (root.ciderService.canSeek && !root.listeningService.busy))
             readonly property bool showPreview: canSeek && (scrubbing || (containsMouse && onRim(mouseX,mouseY)))
             cursorShape: canSeek && onRim(mouseX,mouseY) ? Qt.PointingHandCursor : Qt.ArrowCursor
             function onRim(x,y) { let r=Math.hypot(x-220,y-220); return !root.cassette && r > 205 && r < 224 }
@@ -1011,12 +1063,12 @@ ApplicationWindow {
             }
             function cancelScrub() { scrubbing = false }
             onPressed: mouse => {
-                if (onRim(mouse.x,mouse.y) && canSeek) { updatePreview(mouse.x,mouse.y); lastFraction=previewFraction; if(mouse.modifiers & Qt.ShiftModifier)previewFraction=root.progress; scrubbing=true }
+                if (onRim(mouse.x,mouse.y) && canSeek) { updatePreview(mouse.x,mouse.y); lastFraction=previewFraction; if(mouse.modifiers & Qt.ShiftModifier)previewFraction=root.recordProgress; scrubbing=true }
                 else mouse.accepted=false
             }
             onPositionChanged: mouse => { if(scrubbing)dragPreview(mouse.x,mouse.y,mouse.modifiers & Qt.ShiftModifier);else if(onRim(mouse.x,mouse.y))updatePreview(mouse.x,mouse.y) }
             onReleased: {
-                if (scrubbing && canSeek) root.deckPlayer.seek(root.deckPlayer.duration * previewFraction)
+                if (scrubbing && canSeek) { if (root.recordMap) root.dropRecordNeedle(previewFraction); else root.deckPlayer.seek(root.deckPlayer.duration * previewFraction) }
                 scrubbing=false
             }
             onCanceled: cancelScrub()
@@ -1056,9 +1108,9 @@ ApplicationWindow {
         readonly property real angle: scrubber.previewFraction * 2 * Math.PI
         readonly property point location: platter.mapToItem(root.contentItem, 220 + Math.sin(angle)*170, 220 - Math.cos(angle)*170)
         x: location.x - width/2; y: location.y - height/2
-        width: 58; height: 26; radius: 13
+        width: root.recordMap ? 104 : 58; height: 26; radius: 13
         color: root.surface
-        SpunText { anchors.centerIn: parent; text: root.time(root.deckPlayer.duration * scrubber.previewFraction); font.pixelSize: SpunStyle.caption; color: root.accent }
+        SpunText { anchors.centerIn: parent; text: { const target=root.recordTarget(scrubber.previewFraction); return target ? (target.index+1) + " · " + root.time(target.position) : root.time(root.deckPlayer.duration * scrubber.previewFraction) } font.pixelSize: SpunStyle.caption; color: root.accent }
     }
     SeekSlider {
         app: root; objectName: "miniHorizontalSeek"
@@ -1135,7 +1187,7 @@ ApplicationWindow {
         }
         Row {
             x: 16; y: 80 + (root.showHorizontalSeek ? 28 : 0); spacing: 4
-            IconButton { objectName: "shuffleButton"; y: 4; selected: root.deckPlayer.shuffle; glyphName: "shuffle"; tip: root.deckPlayer.shuffle ? "Shuffle on" : "Shuffle off"; enabled: !root.useCider || !root.ciderService.controlBusy; ink: root.deckPlayer.shuffle ? root.accent : root.mutedInk; hoverFill: root.hoverFill; onClicked: root.deckPlayer.shuffle = !root.deckPlayer.shuffle }
+            IconButton { objectName: "shuffleButton"; y: 4; selected: root.deckPlayer.shuffle; glyphName: "shuffle"; tip: root.deckPlayer.shuffle ? "Shuffle on" : "Shuffle off"; enabled: !root.recordMap && (!root.useCider || !root.ciderService.controlBusy); ink: root.deckPlayer.shuffle ? root.accent : root.mutedInk; hoverFill: root.hoverFill; onClicked: root.deckPlayer.shuffle = !root.deckPlayer.shuffle }
             IconButton { objectName: "previousButton"; y: 4; glyphName: "previous"; tip: "Previous track · Ctrl+←"; ink: root.ink; hoverFill: root.hoverFill; enabled: root.useCider ? root.ciderService.canPrevious : player.count > 0; onClicked: root.deckPlayer.previous() }
             IconButton {
                 objectName: "playButton"
@@ -1928,6 +1980,7 @@ ApplicationWindow {
                                 }
                             }
                         }
+                        PreferenceSwitch { objectName: "vinylAlbumToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Play albums as records"; Accessible.description: "Map available album tracks to the vinyl grooves. Dropping the needle starts that album at the selected position."; glyphName: "disc"; checked: player.vinylAlbumMode; onToggled: player.vinylAlbumMode = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                         PreferenceSwitch { objectName: "horizontalSeekToggle"; app: root; width: parent.width; visible: !root.cassette; height: visible ? implicitHeight : 0; text: "Horizontal progress bar"; glyphName: "minus"; checked: player.horizontalSeek; onToggled: player.horizontalSeek = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                         PreferenceSwitch { objectName: "vinylCrackleToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Vinyl crackle"; glyphName: "volume"; checked: player.vinylCrackle; onToggled: player.vinylCrackle = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                         PreferenceSwitch { objectName: "vinylStaticToggle"; app: root; width: parent.width; visible: root.vinyl; height: visible ? implicitHeight : 0; text: "Surface hiss"; glyphName: "volume"; checked: player.vinylStatic; onToggled: player.vinylStatic = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }

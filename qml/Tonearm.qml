@@ -7,7 +7,7 @@ Item {
     required property var app
     readonly property bool motion: app.animate && visible && app.visible && native.exposed
     readonly property bool engaged: visible && app.deckPlayer.count > 0 && (app.deckPlayer.playing || landing)
-    readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || app.ciderService.canSeek)
+    readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool dragging: false
     property real dragAngle: -4
     property real rawAngle: -4
@@ -19,7 +19,7 @@ Item {
     property real landingProgress: 0
     readonly property real previewProgress: Math.max(0, Math.min(1, (rawAngle - 6) / 20))
     property real lowered: dragging ? .12 : engaged ? 1 : 0
-    property real groove: landing ? landingProgress : Math.max(0, Math.min(1, app.progress))
+    property real groove: landing ? landingProgress : Math.max(0, Math.min(1, app.recordProgress))
     property real armAngle: dragging ? dragAngle : engaged ? 6 + 20 * groove : -4
     Behavior on armAngle {
         enabled: arm.motion && !arm.dragging
@@ -37,11 +37,15 @@ Item {
         if (!valid) { dragging = false; return }
         landingProgress = position; landing = true; landingTimeout.restart()
         dragging = false
-        app.deckPlayer.seek(Math.min(app.deckPlayer.duration - 1, app.deckPlayer.duration * position))
-        app.deckPlayer.play()
+        if (app.recordMap) {
+            if (!app.dropRecordNeedle(position)) { landing = false; landingTimeout.stop() }
+        } else {
+            app.deckPlayer.seek(Math.min(app.deckPlayer.duration - 1, app.deckPlayer.duration * position))
+            app.deckPlayer.play()
+        }
     }
     function confirmLanding() {
-        if (landing && app.deckPlayer.playing && Math.abs(app.progress - landingProgress) < .025) {
+        if (landing && app.deckPlayer.playing && Math.abs(app.recordProgress - landingProgress) < .025) {
             landing = false; landingTimeout.stop()
         }
     }
@@ -51,6 +55,7 @@ Item {
     Connections {
         target: arm.app
         function onCassetteTrackIdentityChanged() { arm.cancelDrag(false); arm.landing = false }
+        function onRecordKeyChanged() { arm.cancelDrag(true); arm.landing = false }
     }
     Connections {
         target: arm.app.deckPlayer
@@ -72,7 +77,12 @@ Item {
         parent: arm; x: 184; y: 60
         visible: arm.canSeek && arm.app.visible && (arm.dragging || (!needleHit.hintDismissed && needleHit.hoveringNeedle) || (needleHit.activeFocus && !needleHit.pointerFocus))
         delay: arm.dragging ? 0 : 650
-        text: arm.dragging ? arm.app.time(arm.previewProgress * arm.app.deckPlayer.duration) : "Drag to seek · Shift for precision"
+        text: {
+            const target = arm.app.recordTarget(arm.previewProgress)
+            if (arm.dragging && target) return target.track.title + " · " + arm.app.time(target.position)
+            if (arm.dragging) return arm.app.time(arm.previewProgress * arm.app.deckPlayer.duration)
+            return arm.app.recordMap ? "Drag to choose an album track · Shift for precision" : "Drag to seek · Shift for precision"
+        }
     }
     // The pivot rests at the record's edge; the stylus stays outside the label.
     Item {

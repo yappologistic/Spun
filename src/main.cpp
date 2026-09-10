@@ -6,6 +6,7 @@
 #include "musicactions.h"
 #ifdef SPUN_DIAGNOSTICS
 #include "librarytest.h"
+#include "mediauitest.h"
 #include "testinput.h"
 #endif
 #include "lyrics.h"
@@ -59,6 +60,7 @@
 #include <QWheelEvent>
 #include <iostream>
 #include <cstring>
+#include <cmath>
 #include <sys/resource.h>
 #include <unistd.h>
 #include <taglib/fileref.h>
@@ -1062,6 +1064,17 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         }
         player.setCassetteSounds(false);{Player restored(temp+"/player.ini");check(!restored.cassetteSounds(),"cassette sound preference survives relaunch");}player.setCassetteSounds(true);
     }
+    {
+        player.pause();player.setVinyl(true);player.setVinylAlbumMode(true);QTest::qWait(200);
+        const auto map=window->property("recordMap").toMap();
+        check(!map.isEmpty() && map.value("rows").toList().size()>=2,"album mode maps known loaded tracks to the record");
+        check(findItem(window->contentItem(),"albumGrooves"),"album track boundaries are drawn on the vinyl");
+        QVariant target;QMetaObject::invokeMethod(window,"recordTarget",Q_RETURN_ARG(QVariant,target),Q_ARG(QVariant,.999));
+        check(!target.toMap().isEmpty()&&target.toMap().value("position").toLongLong()>=0,"record preview resolves a song and timestamp at the inner groove");
+        capture("27-album-record");
+        player.setVinylAlbumMode(false);QTest::qWait(100);
+        check(window->property("recordMap").isNull()||window->property("recordMap").toMap().isEmpty(),"disabling album mode restores single-song seeking");
+    }
     const auto cassetteTrack=player.currentIndex();const auto cassettePosition=player.position();
     player.setMedium("cassette");QTest::qWait(450);
     check(window->property("cassette").toBool()&&!player.vinyl()&&player.currentIndex()==cassetteTrack&&player.position()==cassettePosition,"Cassette switches appearance without changing the selected song or position");
@@ -1077,6 +1090,7 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     if(reel) {
         player.seek(player.duration()*.45);
         player.play();QTest::qWait(300);const auto angle=reel->rotation();QTest::qWait(300);
+        check(std::remainder(reel->rotation()-angle,360.)<0,"cassette reels turn counterclockwise during forward playback");
         check(reel->rotation()!=angle&&findItem(window->contentItem(),"discFace")->rotation()==0,"playing rotates the cassette reels while the artwork label stays still");
         auto *wave=findItem(window->contentItem(),"cassetteSeekWave");
         check(wave&&wave->property("linear").toBool()&&wave->property("amplitude").toDouble()>2,"cassette playback uses the shared animated squiggly progress track");
@@ -1476,7 +1490,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--self-test" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--self-test" || option == "--test-media-ui" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1505,6 +1519,7 @@ int main(int argc, char **argv) {
     parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"test-library", "Run isolated music browser checks"});
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
+    parser.addOption({"test-media-ui", "Run isolated vinyl and cassette interaction checks"});
     parser.addOption({"test-import-ui", "Run isolated folder import UI checks"});
     parser.addOption({"smoke-live", "Run isolated checks on the live desktop"});
     parser.addOption({"verify-cider", "Verify a live Cider connection, briefly testing and restoring playback"});
@@ -1517,7 +1532,7 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
     if (!test && !parser.isSet("config")) {
         auto bus = QDBusConnection::sessionBus();
         if (bus.interface() && bus.interface()->isServiceRegistered("org.mpris.MediaPlayer2.spun")) {
@@ -1560,7 +1575,7 @@ int main(int argc, char **argv) {
     VinylNoise vinylNoise(!test);
     Native native;
     const qint64 backendReady = startup.elapsed();
-    if (!test) registerMpris(&player);
+
     qmlRegisterType<Symbol>("Spun", 1, 0, "Symbol");
     qmlRegisterType<Disc>("Spun", 1, 0, "Disc");
     qmlRegisterType<ArtworkView>("Spun", 1, 0, "ArtworkView");
@@ -1613,6 +1628,7 @@ int main(int argc, char **argv) {
     qmlReady = startup.elapsed();
     if (engine.rootObjects().isEmpty()) return 1;
     auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    if (!test) { if (auto *mediaControls = registerMpris(&player, &cider)) mediaControls->setSourceWindow(window); }
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &player, &Player::save);
     if (parser.isSet("benchmark")) {
         window->setProperty("benchmarkPinned", true);
@@ -1993,6 +2009,7 @@ int main(int argc, char **argv) {
         std::cout << "RESULT " << failures << " failures" << std::endl;
         app.exit(failures ? 1 : 0);
     });
+    else if (parser.isSet("test-media-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseMediaUi(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-library")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
     else if (test) QTimer::singleShot(650, &app, [&] {
         app.exit(exercise(player, theme, lyrics, window, temp.path(), parser.value("capture-dir"), parser.isSet("smoke-live"), parser.isSet("test-import-ui")));

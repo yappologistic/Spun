@@ -24,6 +24,8 @@ public:
     QVariantMap session() const;
     QString error() const { return m_error; }
     void setRememberSession(bool enabled);
+    Q_INVOKABLE void cancelAlbumPosition();
+    Q_INVOKABLE bool playAlbumPosition(const QString &albumId, const QVariantList &tracks, int index, qint64 position);
     Q_INVOKABLE void addBookmark();
     Q_INVOKABLE void removeBookmark(const QString &key);
     Q_INVOKABLE void playBookmark(const QString &key);
@@ -49,6 +51,9 @@ private:
     void verifyPlaying(int attempts);
     void verifySeek();
     static QVariantMap snapshotTrack(const QJsonObject &snapshot);
+    bool m_recordOperation=false, m_recordLoading=false;
+    int m_recordIndex=0, m_recordAttempts=0;
+    QVariantList m_recordTracks;
     Cider *m_cider;
     QString m_path, m_error;
     QVariantList m_bookmarks;
@@ -57,5 +62,7 @@ private:
     int m_tokenGeneration=0,m_observedRevision=-1;
     bool m_storageValid=true;
     bool m_remember=false,m_busy=false,m_reading=false,m_inserting=false,m_restoring=false,m_preparing=false;
+    quint64 m_operationGeneration=0;
+    QTimer m_recordTimeout;
     QTimer m_checkpoint,m_saveDelay;
 };

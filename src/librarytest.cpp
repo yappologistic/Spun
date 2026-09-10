@@ -33,6 +33,7 @@ int exerciseCiderEvents(const QString &temp);
 int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &captures) {
     if(!captures.isEmpty())QDir().mkpath(captures);
     int recommendationReads=0,discoveryDelay=0,discoveryStatus=200,discographyDelay=0;bool emptyRecommendations=false,malformedRecommendations=false,hostileRecommendations=false,failRecommendationPage=false,rejectDiscography=false,emptyDiscography=false;
+    bool recordFixture=false;
     bool tailFixture=false,listeningFixture=false,snapshotFailure=false,ignoreSeek=false,wrongSong=false;
     QString snapshotId="b",snapshotType="songs";double snapshotPosition=12.345;int snapshotReads=0,seekWrites=0,delayedAppendMs=0;
     int failures=0, plays=0, reads=0; bool failPage=false, hostilePage=false, rejectPlay=false, rejectRead=false, manyRows=false;
@@ -253,6 +254,10 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
                 response["data"]=data;if(rejectRead)code=403;
             } else if(endpoint.startsWith("/api/v2/playback/")) {
                 ++plays;playedShuffle=body["shuffle"].toBool();playedId=body["id"].toString();playedType=body["type"].toString();playedPath=endpoint;if(rejectPlay)code=422;
+                if(recordFixture && !rejectPlay && endpoint.endsWith("play-collection")) {
+                    fixtureQueue={};for(const auto &id:QStringList{"a","b","c"})fixtureQueue.append(QJsonObject{{"track",resource(id,"songs",id)}});
+                    fixturePosition=0;snapshotId="a";snapshotType="songs";snapshotPosition=0;
+                }
                 if(listeningFixture && !rejectPlay && endpoint.endsWith("play-item")) {snapshotId=playedId;snapshotType=playedType;snapshotPosition=0;}
             }
             QByteArray bytes=QJsonDocument(response).toJson(QJsonDocument::Compact);
@@ -1412,6 +1417,28 @@ int exerciseLibrary(QQuickWindow *window, const QString &temp, const QString &ca
     check(wait([&]{return !listeningState.busy();})&&!listeningState.error().isEmpty()&&seekWrites==beforeWrongSeek,"bookmark never seeks when Cider reports a different song");wrongSong=false;
     ignoreSeek=true;listeningState.playBookmark(bookmarkKey);check(listeningState.busy(),"bookmark seek-error check starts a fresh playback operation");check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&!listeningState.error().isEmpty(),"an acknowledged but ineffective seek is reported honestly");ignoreSeek=false;
     snapshotFailure=true;listeningState.addBookmark();check(wait([&]{return !listeningState.busy();})&&listeningState.bookmarks().size()==1,"failed playback snapshot cannot create an invalid bookmark");snapshotFailure=false;
+    {
+        recordFixture=true;
+        wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();});
+        QVariantList album;
+        for(const auto &id:QStringList{"a","b","c"})album.append(QVariantMap{{"id",id},{"type","songs"},{"playable",true},{"duration",32000},{"title",id}});
+        const int beforeRecordSeek=seekWrites;
+        check(listeningState.playAlbumPosition("123",album,1,7000),"album needle accepts a playable track and position");
+        check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&listeningState.error().isEmpty()&&fixturePosition==1&&snapshotId=="b"&&snapshotPosition==7&&seekWrites==beforeRecordSeek+1,"album needle starts the collection, verifies its queue and song, then seeks");
+        const int beforeInvalidAlbum=plays;
+        check(!listeningState.playAlbumPosition("123",album,9,0)&&!listeningState.playAlbumPosition("123",album,0,32000)&&plays==beforeInvalidAlbum,"invalid album drops never send playback commands");
+        wrongSong=true;const int beforeWrongRecordSeek=seekWrites;
+        listeningState.playAlbumPosition("123",album,2,8000);
+        check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&!listeningState.error().isEmpty()&&seekWrites==beforeWrongRecordSeek,"album needle never seeks a different playing song");wrongSong=false;
+        rejectJump=true;listeningState.playAlbumPosition("123",album,1,4000);
+        check(wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();})&&!listeningState.error().isEmpty()&&seekWrites==beforeWrongRecordSeek,"rejected album track selection leaves the position unchanged");rejectJump=false;
+        wait([&]{return !listeningState.busy()&&!cider.controlBusy()&&!cider.queueBusy();});
+        const int beforeCancelledSeek=seekWrites;
+        check(listeningState.playAlbumPosition("123",album,1,5000),"album selection can start before cancellation");
+        listeningState.cancelAlbumPosition();QTest::qWait(1300);
+        check(!listeningState.busy()&&seekWrites==beforeCancelledSeek,"cancelled album selection ignores late replies and never seeks");
+        recordFixture=false;
+    }
     snapshotId="b";snapshotPosition=12.345;fixtureQueue={queueTrack("a"),queueTrack("b"),queueTrack("c")};fixturePosition=1;syncQueue();
     listeningState.setRememberSession(true);check(wait([&]{return listeningState.session()["trackCount"].toInt()==2;}),"optional checkpoint saves the current and upcoming songs without history");
     check(listeningState.session()["position"].toLongLong()==12345,"session checkpoint preserves exact playback position");

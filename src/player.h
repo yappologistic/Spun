@@ -24,6 +24,7 @@ class Player : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
     Q_PROPERTY(int vinylSpeed READ vinylSpeed WRITE setVinylSpeed NOTIFY settingsChanged)
+    Q_PROPERTY(bool vinylAlbumMode READ vinylAlbumMode WRITE setVinylAlbumMode NOTIFY settingsChanged)
     Q_PROPERTY(bool horizontalSeek READ horizontalSeek WRITE setHorizontalSeek NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylCrackle READ vinylCrackle WRITE setVinylCrackle NOTIFY settingsChanged)
     Q_PROPERTY(bool vinylStatic READ vinylStatic WRITE setVinylStatic NOTIFY settingsChanged)
@@ -104,6 +105,9 @@ public:
     bool miniMode() const { return m_miniMode; }
     bool backgroundBlur() const { return m_backgroundBlur; }
     bool busy() const { return m_busy; }
+    bool vinylAlbumMode() const { return m_vinylAlbumMode; }
+    void setVinylAlbumMode(bool value);
+    Q_INVOKABLE bool playAlbumPosition(const QString &path, qint64 position);
     QString importStatus() const { return m_importStatus; }
     QString error() const { return m_error; }
     QUrl currentUrl() const;
@@ -124,8 +128,8 @@ public:
     Q_INVOKABLE void play();
     Q_INVOKABLE void pause();
     Q_INVOKABLE void stop();
-    Q_INVOKABLE void next(bool automatic = false);
-    Q_INVOKABLE void previous();
+    Q_INVOKABLE void next(bool automatic = false, bool autoplay = true);
+    Q_INVOKABLE void previous(bool autoplay = true);
     Q_INVOKABLE void seek(qint64 milliseconds);
     Q_INVOKABLE void remove(int index);
     Q_INVOKABLE void clear();
@@ -144,6 +148,7 @@ signals:
     void queueChanged();
     void playingChanged();
     void positionChanged();
+    void seeked(qint64 position);
     void durationChanged();
     void volumeChanged();
     void settingsChanged();
@@ -178,6 +183,7 @@ private:
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
     int m_vinylSpeed=33;
+    bool m_vinylAlbumMode=false;
     bool m_horizontalSeek=false, m_vinylCrackle=false, m_vinylStatic=false, m_vinylSkips=false;
     bool m_cassetteSounds=true;
     QString m_medium = "cd";

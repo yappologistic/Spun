@@ -107,8 +107,10 @@ Spun connects to Cider's local API on port 10767. Basic playback controls use Li
 - **Artwork:** choose **View artwork** from the player's **⋯** menu to inspect the full cover without the disc cutout.
 - **Queue browsing:** scrolling away keeps your place when playback advances. **Current song** returns to the playing track and resumes following it.
 - **Disc reverse:** double-click the disc or press **F** to see album details and tracks. Switch to lyrics with **Y** when available. Local lyrics can come from matching `.lrc` / `.txt` files or embedded metadata.
-- **Disc appearance:** choose **CD**, **Vinyl** or **Cassette** in **More → Preferences**. Vinyl keeps the artwork on its center label, with grooves, a small spindle hole, and a gold tonearm. The arm lowers for playback, tracks inward through the song, and parks on pause. It scales with Mini mode, stays out of the reverse view and disc swaps, and respects reduced motion. Cassette mode adds a tape shell, animated reels, a horizontal progress bar and optional transport sounds. All three styles share playback, reverse-side details, lyrics and Mini mode. Your choice is remembered.
+- **Disc appearance:** choose **CD**, **Vinyl** or **Cassette** in **More → Preferences**. Vinyl keeps the artwork on its center label, with grooves, a small spindle hole, and a gold tonearm. The arm lowers for playback, tracks inward through the song, and parks on pause. It scales with Mini mode, stays out of the reverse view and disc swaps, and respects reduced motion. Cassette mode adds a tape shell, reels that turn counterclockwise during forward playback and reverse while rewinding, a horizontal progress bar and optional transport sounds. All three styles share playback, reverse-side details, lyrics and Mini mode. Your choice is remembered.
 - **Vinyl controls:** choose 33⅓ or 45 RPM, enable a horizontal progress bar, or add optional crackle, hiss and groove skips in Preferences. Drag the needle onto the grooves to seek and play.
+- **Albums as records:** enable **Play albums as records** in Vinyl preferences to give each album track its own groove band. Drop the needle to choose a song and position. Local mode uses the album tracks already loaded into Spun, in track-number order. With Cider, a drop starts the album in its queue, then verifies the track before seeking. Missing durations or unavailable tracks keep ordinary single-song seeking. The horizontal bar always seeks within the current song.
+- **Desktop controls:** Spun’s desktop media entry follows the selected Local or Cider source, including artwork, playback state, volume and seeking. Cider may also expose its own desktop entry.
 - **Mini mode:** a little disc with controls underneath. Optionally keep it above other windows in Preferences. Hover or keyboard-focus **Next** to preview the upcoming artwork, title and artist. Cider’s queue is checked on demand; an unknown next track is shown honestly, including local shuffle. No extra polling runs while the preview is closed.
 
 **More → Preferences** contains CD/Vinyl appearance, the font picker, background blur, disc animation and other playback options. Spun follows Noctalia's colors and reduced-motion preference when available. Hyprland integration depends on the compositor's supported interfaces.
@@ -184,6 +186,8 @@ Build the diagnostic companion and run isolated playback, API-fixture and UI che
 ./scripts/build.sh -DBUILD_TESTING=ON
 QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software QSG_RENDER_LOOP=basic QT_QPA_PLATFORMTHEME= ./build/spun --self-test
 ```
+
+For focused vinyl and cassette interaction checks, use `--test-media-ui` with the same offscreen environment. Run desktop-control checks with `ctest --test-dir build -R spun-desktop-media --output-on-failure`; they use a private D-Bus session and a fake Cider service.
 
 For recursive folder-import checks, run `QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= ./build/spun-import-test`. Add `--stress` to test 20,000 nested sparse WAV files representing 625 GiB of audio without allocating that much disk space. The temporary files are removed after the run.
 

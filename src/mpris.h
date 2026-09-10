@@ -3,6 +3,8 @@
 #include <QDBusObjectPath>
 #include <QVariantMap>
 #include "player.h"
+#include "cider.h"
+#include <QPointer>
 
 class RootAdaptor : public QDBusAbstractAdaptor {
     Q_OBJECT
@@ -41,42 +43,56 @@ class PlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(qlonglong Position READ position)
     Q_PROPERTY(double MinimumRate READ rate CONSTANT)
     Q_PROPERTY(double MaximumRate READ rate CONSTANT)
-    Q_PROPERTY(bool CanGoNext READ canControl)
-    Q_PROPERTY(bool CanGoPrevious READ canControl)
+    Q_PROPERTY(bool CanGoNext READ canNext)
+    Q_PROPERTY(bool CanGoPrevious READ canPrevious)
     Q_PROPERTY(bool CanPlay READ canControl)
     Q_PROPERTY(bool CanPause READ canControl)
-    Q_PROPERTY(bool CanSeek READ canControl)
+    Q_PROPERTY(bool CanSeek READ canSeek)
     Q_PROPERTY(bool CanControl READ always CONSTANT)
 public:
-    explicit PlayerAdaptor(Player *p);
+    explicit PlayerAdaptor(Player *p, Cider *cider = nullptr);
+    void setRemote(bool remote);
+    void setSourceWindow(QObject *window);
+    QString trackId() const;
+    qint64 duration() const;
     QString status() const;
     QString loop() const;
     void setLoop(const QString &value);
     double rate() const { return 1.0; }
-    void setRate(double) {}
-    bool shuffle() const { return m_player->shuffle(); }
-    void setShuffle(bool value) { m_player->setShuffle(value); }
+    void setRate(double value) { if (value == 0.) Pause(); }
+    bool shuffle() const { return m_remote ? m_cider->shuffle() : m_player->shuffle(); }
+    void setShuffle(bool value) { if (m_remote) m_cider->setShuffle(value); else m_player->setShuffle(value); }
     QVariantMap metadata() const;
-    double volume() const { return m_player->volume(); }
-    void setVolume(double v) { m_player->setVolume(v); }
-    qlonglong position() const { return m_player->position() * 1000; }
-    bool canControl() const { return m_player->count() > 0; }
+    double volume() const { return m_remote ? m_cider->volume() : m_player->volume(); }
+    void setVolume(double v);
+    qlonglong position() const { return (m_remote ? m_cider->position() : m_player->position()) * 1000; }
+    bool canControl() const { return m_remote ? m_cider->count() > 0 : m_player->count() > 0; }
+    bool canSeek() const { return canControl() && duration() > 0 && (!m_remote || m_cider->canSeek()); }
+    bool canNext() const { return m_remote ? canControl() && m_cider->canNext() : m_player->count() > 1; }
+    bool canPrevious() const { return m_remote ? canControl() && m_cider->canPrevious() : m_player->count() > 0; }
     bool always() const { return true; }
 public slots:
-    void Next() { m_player->next(); }
-    void Previous() { m_player->previous(); }
-    void Pause() { m_player->pause(); }
-    void PlayPause() { m_player->toggle(); }
-    void Stop() { m_player->stop(); }
-    void Play() { m_player->play(); }
+    void Next();
+    void Previous();
+    void Pause() { if (canControl()) { if (m_remote) m_cider->pause(); else m_player->pause(); } }
+    void PlayPause() { if (canControl()) { if (m_remote) m_cider->toggle(); else m_player->toggle(); } }
+    void Stop() { if (m_remote) { if (canControl()) m_cider->stop(); } else m_player->stop(); }
+    void Play() { if (canControl()) { if (m_remote) m_cider->play(); else m_player->play(); } }
     void Seek(qlonglong offset);
     void SetPosition(const QDBusObjectPath &trackId, qlonglong position);
     void OpenUri(const QString &uri) { m_player->addUrls({QUrl(uri)}); }
 signals:
     void Seeked(qlonglong position);
+private slots:
+    void syncSource();
 private:
     void changed();
+    void seekTo(qint64 position);
     Player *m_player;
+    Cider *m_cider;
+    QPointer<QObject> m_sourceWindow;
+    bool m_remote = false, m_changePending = false;
+    QVariantMap m_lastProperties;
 };
 
-bool registerMpris(Player *player);
+PlayerAdaptor *registerMpris(Player *player, Cider *cider);

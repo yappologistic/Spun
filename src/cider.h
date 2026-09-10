@@ -95,6 +95,7 @@ public:
     Q_INVOKABLE void reconnect();
     bool available() const { return m_available; }
     ~Cider() override;
+    QUrl artworkUrl() const { return m_artUrl; }
     QString trackKey() const { return count() ? m_track : QString{}; }
     QString title() const { return m_title.isEmpty() ? "Cider" : m_title; }
     QString artist() const { return m_artist; }
@@ -121,6 +122,7 @@ public:
     Q_INVOKABLE void refreshQueue();
     Q_INVOKABLE void select(int index);
     bool playing() const { return m_playing; }
+    QString playbackStatus() const { return m_available ? m_playbackStatus : QStringLiteral("Stopped"); }
     qint64 position() const;
     qint64 duration() const { return m_duration; }
     double volume() const { return m_volume; }
@@ -165,6 +167,7 @@ public:
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void play();
     Q_INVOKABLE void pause();
+    void stop() { if (m_available) call("Stop"); }
     Q_INVOKABLE void next();
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(qint64 milliseconds);
@@ -190,6 +193,7 @@ signals:
     void artworkChanged();
     void playingChanged();
     void positionChanged();
+    void positionDiscontinuity(qint64 position);
     void volumeChanged();
     void settingsChanged();
     void errorChanged();
@@ -265,6 +269,7 @@ private:
     std::function<void()> m_afterQueue;
     bool m_available = false, m_playing = false, m_shuffle = false, m_refreshing = false;
     bool m_canSeek = false, m_canNext = false, m_canPrevious = false;
+    QString m_playbackStatus="Stopped";
     QString m_title, m_artist, m_album, m_track, m_error;
     QUrl m_artUrl;
     QImage m_art;
