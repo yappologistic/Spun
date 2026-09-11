@@ -5,7 +5,7 @@ SpunSlider {
     id: control
     required property var app
     property alias pointerInput: seekPointer
-    enabled: visible && !app.swapRunning && app.deckPlayer.duration > 0 && (!app.useCider || app.ciderService.canSeek)
+    enabled: visible && !app.swapRunning && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool scrubbing: false
     property real previewValue: 0
     property real lastPointer: 0
@@ -13,7 +13,7 @@ SpunSlider {
     property double lastMove: 0
     property string seekTrack: ""
     previewing: scrubbing
-    value: scrubbing ? previewValue : app.trackVisualProgress
+    value: scrubbing ? previewValue : app.recordVisualProgress
     function cancelSeek() {
         scrubbing=false; windDirection=0
         if(app.activeSeekControl===control)app.activeSeekControl=null
@@ -21,9 +21,9 @@ SpunSlider {
     onEnabledChanged: if(!enabled)cancelSeek()
     onVisibleChanged: if(!visible)cancelSeek()
     Component.onDestruction: if(app.activeSeekControl===control)app.activeSeekControl=null
-    valueText: app.time(value * app.deckPlayer.duration)
-    Accessible.name: "Playback position"
-    onMoved: if(!scrubbing)app.deckPlayer.seek(value * app.deckPlayer.duration)
+    valueText: (app.recordMap ? "Album · " : "") + app.time(value * app.seekDuration)
+    Accessible.name: app.recordMap ? "Album playback position" : "Playback position"
+    onMoved: if(!scrubbing)app.seekTimeline(value)
     MouseArea {
         id: seekPointer; objectName: control.objectName + "Pointer"
         anchors.fill: parent; preventStealing: true; acceptedButtons: Qt.LeftButton
@@ -32,15 +32,15 @@ SpunSlider {
         function beginPointer(mouse) {
             control.forceActiveFocus(Qt.MouseFocusReason)
             control.seekTrack=control.app.cassetteTrackIdentity
-            control.previewValue=(mouse.modifiers & Qt.ShiftModifier)?control.app.progress:fraction(mouse.x)
-            control.lastPointer=mouse.x;control.windDirection=Math.sign(control.previewValue-control.app.progress);control.lastMove=Date.now()
+            control.previewValue=(mouse.modifiers & Qt.ShiftModifier)?control.app.recordProgress:fraction(mouse.x)
+            control.lastPointer=mouse.x;control.windDirection=Math.sign(control.previewValue-control.app.recordProgress);control.lastMove=Date.now()
             control.scrubbing=true;control.app.activeSeekControl=control
             if(control.app.cassette)tapeSound.transport()
         }
         function movePointer(mouse) {
             if(!control.scrubbing)return
             const delta=(mouse.x-control.lastPointer)/(control.availableWidth-control.handle.width)
-            control.previewValue=Math.max(0,Math.min(1,control.previewValue+delta*((mouse.modifiers & Qt.ShiftModifier)?.1:1)))
+            control.previewValue=Math.max(0,Math.min(1,control.previewValue+delta*((mouse.modifiers & Qt.ShiftModifier)? 0.1:1)))
             control.lastPointer=mouse.x
             if(delta!==0){control.windDirection=Math.sign(delta);control.lastMove=Date.now()}
         }
@@ -49,7 +49,7 @@ SpunSlider {
             const valid=control.enabled && control.seekTrack===control.app.cassetteTrackIdentity
             const position=control.previewValue
             control.cancelSeek()
-            if(valid){control.app.deckPlayer.seek(position*control.app.deckPlayer.duration);if(control.app.cassette)tapeSound.transport()}
+            if(valid){control.app.seekTimeline(position);if(control.app.cassette)tapeSound.transport()}
         }
         function cancelPointer() { control.cancelSeek() }
         onPressed: mouse => beginPointer(mouse)
@@ -82,7 +82,7 @@ SpunSlider {
         Rectangle {
             anchors.verticalCenter: parent.verticalCenter; anchors.right: parent.right
             width: 3; height: 3; radius: 1.5; color: control.app.accent
-            visible: control.app.progress < .95
+            visible: control.value < .95
         }
     }
 }

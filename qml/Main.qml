@@ -8,10 +8,13 @@ ApplicationWindow {
     objectName: "spunWindow"
     title: "Spun"
     visible: true
-    readonly property real layoutWidth: miniMode ? 300 : sideOpen ? 860 : 530
+    readonly property bool wideMixer: tx6Visible && threeDRequested
+    readonly property real playerWidth: miniMode ? 300 : wideMixer ? 740 : 530
+    readonly property real mixerHeightExtra: wideMixer ? 64 : 0
+    readonly property real layoutWidth: playerWidth + (!miniMode && sideOpen ? 330 : 0)
     readonly property real miniBaseHeight: showHorizontalSeek ? 382 : 354
     readonly property real layoutHeight: miniMode ? miniBaseHeight + (actionNotice.visible ? 48 : 0)
-        : Math.max(730, actionNotice.visible ? actionNotice.y + actionNotice.height + 8 : 730)
+        : Math.max(730 + mixerHeightExtra, actionNotice.visible ? actionNotice.y + actionNotice.height + 8 : 730)
     onLayoutHeightChanged: Qt.callLater(updateMask)
     readonly property real uiScale: testMode ? typography.uiScale : Math.min(typography.uiScale,
         Math.max(.5, (Screen.desktopAvailableWidth - 40) / layoutWidth),
@@ -30,12 +33,14 @@ ApplicationWindow {
     onThreeDActiveChanged: { cancel3DPointer(); cancelSeekPreview(); scrubber.cancelScrub(); stopSwap(); Qt.callLater(updateMask) }
     readonly property var tonearm: armLoader.item
     property var threeDPointer: null
+    readonly property bool threeDHardwarePressed: !!(tx6Controls && tx6Controls.pressedControl>=0) || !!(scene3D.item && scene3D.item.hardwareActive) || !!(cassetteControls && cassetteControls.pressedControl>=0) || !!(cdControls && cdControls.pressedControl>=0)
     function pointerEvent(control, point, modifiers) {
         const p=control.mapFromItem(mediaSurface,point.x,point.y)
         return {x:p.x,y:p.y,modifiers:modifiers,accepted:true}
     }
     function controlAt3DPoint(point) {
         if(menuOpen || swapRunning)return null
+        if(recorder && recorderView)return recorderView.controlAt(recorderView.mapFromItem(mediaSurface,point.x,point.y))
         let control=null
         if(vinyl && tonearm && tonearm.canSeek) {
             const p=tonearm.mapFromItem(mediaSurface,point.x,point.y),tip=tonearm.pointerInput.tip
@@ -51,22 +56,32 @@ ApplicationWindow {
         }
         return control
     }
-    function begin3DPointer(point, modifiers) {
+    function begin3DPointer(point, modifiers, hitControl) {
         cancel3DPointer()
-        const control=controlAt3DPoint(point)
+        const control=hitControl
         if(control) { const event=pointerEvent(control,point,modifiers);control.beginPointer(event);if(event.accepted)threeDPointer=control }
     }
     function move3DPointer(point, modifiers) {
         if(threeDPointer)threeDPointer.movePointer(pointerEvent(threeDPointer,point,modifiers))
     }
     function end3DPointer() { const control=threeDPointer;threeDPointer=null;if(control)control.endPointer() }
-    function cancel3DPointer() { const control=threeDPointer;threeDPointer=null;if(control)control.cancelPointer() }
-    readonly property bool bodyVisible: (player.showPlayerBody || threeDRequested) && !miniMode
-    readonly property real mediumScale: bodyVisible && !discFlipped ? .86 : 1
+    function cancel3DPointer() { if(tx6Controls)tx6Controls.cancel();if(cdControls)cdControls.cancel();if(cassetteControls)cassetteControls.cancel(); if(scene3D.item)scene3D.item.cancelHardware(); const control=threeDPointer;threeDPointer=null;if(control)control.cancelPointer() }
+    readonly property bool bodyVisible: (player.showPlayerBody || threeDRequested || recorder) && !miniMode
+    readonly property real mediumScale: bodyVisible && !discFlipped && !recorder ? .86 : 1
     readonly property color cassetteShell: player.cassetteFinish === "cream" ? "#bab29c" : player.cassetteFinish === "clear" ? "#b06f8285" : root.surface
     property real lidOpen: 0
     property real packageOpacity: 0
     onBodyVisibleChanged: Qt.callLater(function() { stopSwap(); cancelSeekPreview(); updateMask() })
+    readonly property bool recorder: player.medium === "tp7"
+    readonly property var recorderView: recorderLoader.item
+    readonly property bool tx6Visible: recorder && tx6.visible && !miniMode && !discFlipped
+    readonly property var tx6Controls: tx6Loader.item
+    Binding { target: tx6; property: "available"; value: !root.useCider }
+    Connections { target: tx6; function onFeedback(message,error){root.notifyAction(message,error)} }
+    onTx6VisibleChanged: { cancel3DPointer(); Qt.callLater(updateMask) }
+    readonly property bool cd: player.medium === "cd"
+    readonly property var cdControls: cdControlsLoader.item
+    readonly property var cassetteControls: cassetteControlsLoader.item
     readonly property bool cassette: player.medium === "cassette"
     onCassetteChanged: Qt.callLater(function() { stopSwap(); scrubber.cancelScrub(); updateMask() })
     readonly property bool vinyl: player.vinyl
@@ -82,7 +97,7 @@ ApplicationWindow {
         if (crossfadeMenu.visible) { crossfadeMenu.service.refreshCrossfade(); crossfadeMenu.service.refreshAudioOptions() }
         if (qualityPopup.visible) root.ciderService.refreshAudioQuality()
     }
-    Connections { target: player; function onMediumChanged() { root.cancel3DPointer(); root.spinSpeed = 0; root.stopSwap(); Qt.callLater(root.updateMask) } function onSettingsChanged() { if (!player.vinylAlbumMode || !player.vinyl) root.listeningService.cancelAlbumPosition() } }
+    Connections { target: player; function onMediumChanged() { root.cancel3DPointer(); root.cancelSeekPreview(); root.spinSpeed = 0; root.stopSwap(); Qt.callLater(root.updateMask) } function onSettingsChanged() { if (!player.vinylAlbumMode || !player.vinyl) root.listeningService.cancelAlbumPosition() } }
     Connections { target: root.listeningService; function onFeedback(message, error) { root.notifyAction(message, error) } }
     Connections { target: root.ciderService; function onRemoteSettingsChanged() { root.refreshOpenCiderDetails() } }
     Timer {
@@ -127,11 +142,11 @@ ApplicationWindow {
     function stopSwap() { discSwap.stop(); resetSwap(); presentation.releaseOutgoing() }
     function presentDisc() {
         const albumKey = deckPlayer.count ? (useCider ? "cider:" : "local:") + (deckPlayer.albumKey || deckPlayer.title) : ""
-        presentation.present(deckPlayer.artwork, albumKey, animate && !discFlipped && visible && platformNative.exposed)
+        presentation.present(deckPlayer.artwork, albumKey, animate && !recorder && !discFlipped && visible && platformNative.exposed)
     }
     function syncLibrary() { if (!visible || visibility === Window.Minimized) { songMenu.close(); musicBrowser.closeActions() }; library.active = libraryOpen && useCider && visible && visibility !== Window.Minimized }
     function syncLyrics() { lyrics.remote = useCider; lyrics.active = discFlipped && lyricsView && visible && visibility !== Window.Minimized }
-    onLyricsViewChanged: { syncLyrics(); if (!lyricsView && lyricList.activeFocus) contentItem.forceActiveFocus() }
+    onLyricsViewChanged: { syncLyrics(); if (discFlipped) Qt.callLater(focusDiscDetails) }
     onVisibilityChanged: { syncLibrary(); syncLyrics(); if (root.visibility === Window.Minimized) { stopSwap(); cancelSeekPreview() } }
     onVisibleChanged: { syncLibrary(); syncLyrics(); if (!root.visible) { stopSwap(); cancelSeekPreview() } }
     onAnimateChanged: if (!animate) { stopSwap(); tapeWindSpeed = 0 }
@@ -152,14 +167,11 @@ ApplicationWindow {
         return {rows: rows, total: total, current: current}
     }
     readonly property string recordKey: recordMap ? (useCider ? "cider:" : "local:") + recordMap.rows.map(row => (row.track.id || row.track.path) + ":" + row.duration).join("|") : ""
-    onRecordKeyChanged: scrubber.cancelScrub()
+    onRecordKeyChanged: { cancelSeekPreview(); scrubber.cancelScrub() }
     readonly property real recordProgress: recordMap ? Math.max(0, Math.min(1, (recordMap.rows[recordMap.current].start + deckPlayer.position) / recordMap.total)) : progress
     readonly property bool seekPreviewActive: !!activeSeekControl || scrubber.scrubbing || !!(tonearm && tonearm.dragging)
     readonly property real recordVisualProgress: {
-        if (activeSeekControl) {
-            const fraction=activeSeekControl.previewValue
-            return recordMap ? (recordMap.rows[recordMap.current].start + fraction*recordMap.rows[recordMap.current].duration)/recordMap.total : fraction
-        }
+        if (activeSeekControl) return activeSeekControl.previewValue
         if (scrubber.scrubbing) return scrubber.previewFraction
         if (tonearm && tonearm.dragging) return tonearm.previewProgress
         if (tonearm && tonearm.landing) return tonearm.landingProgress
@@ -179,6 +191,12 @@ ApplicationWindow {
         }
         return null
     }
+    readonly property real seekDuration: recordMap ? recordMap.total : deckPlayer.duration
+    function seekTimeline(fraction) {
+        if (recordMap) return dropRecordNeedle(fraction)
+        deckPlayer.seek(fraction * deckPlayer.duration)
+        return true
+    }
     function dropRecordNeedle(fraction) {
         const target = recordTarget(fraction)
         if (!target) return false
@@ -192,6 +210,14 @@ ApplicationWindow {
         cancelSeekPreview(); scrubber.cancelScrub()
         stopSwap()
         syncLyrics()
+        if (discFlipped) Qt.callLater(focusDiscDetails)
+        else contentItem.forceActiveFocus()
+    }
+    function focusDiscDetails() {
+        if (!discFlipped || menuOpen) return
+        if (!lyricsView) albumList.forceActiveFocus(Qt.TabFocusReason)
+        else if (lyricList.visible) lyricList.forceActiveFocus(Qt.TabFocusReason)
+        else lyricsViewButton.forceActiveFocus(Qt.TabFocusReason)
     }
     function receiveMediaDrop(drop) {
         const urls = drop.hasUrls ? drop.urls : []
@@ -401,7 +427,7 @@ ApplicationWindow {
     }
     property bool queueOpen: false
     property bool helpOpen: false
-    readonly property bool menuOpen: artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
+    readonly property bool menuOpen: !!(tx6Controls && tx6Controls.popupOpen) || artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
     property bool backgroundBlur: player.backgroundBlur && platformNative.supportsBlur
     onBackgroundBlurChanged: { platformNative.effects(root, backgroundBlur); Qt.callLater(updateMask) }
     property bool muted: false
@@ -503,10 +529,10 @@ ApplicationWindow {
     Shortcut { sequence: "Left"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.seek(root.deckPlayer.position - 5000) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.next() }
     Shortcut { sequence: "Ctrl+Left"; enabled: !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.previous() }
-    Shortcut { sequence: "Up"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
-    Shortcut { sequence: "Down"; enabled: !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
+    Shortcut { sequence: "Up"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
+    Shortcut { sequence: "Down"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
     Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: root.toggleMute() }
-    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
+    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer || root.threeDHardwarePressed) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
     Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
     Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: root.flipDisc() }
     Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: root.helpOpen = !root.helpOpen }
@@ -522,29 +548,28 @@ ApplicationWindow {
     FolderDialog { id: folder; title: "Add a music folder"; onAccepted: { root.useLocal(); player.addUrls([selectedFolder], player.count === 0) } }
     FileDialog { id: cover; title: "Choose the disc artwork"; nameFilters: ["Artwork (*.jpg *.jpeg *.png *.webp)"]; onAccepted: player.setCover(selectedFile) }
 
-    Timer {
-        interval: 16; repeat: true
-        running: root.animate && root.visible && root.visibility !== Window.Minimized && platformNative.exposed && (root.deckPlayer.playing || root.spinSpeed > .02 || root.activeSeekControl || Math.abs(root.tapeWindSpeed) > .5)
-        property double lastTime: 0
-        onRunningChanged: lastTime = Date.now()
-        onTriggered: {
-            const now = Date.now()
-            const dt = Math.min(.05, (now-lastTime)/1000)
-            lastTime = now
-            const target = root.deckPlayer.playing ? (root.vinyl ? root.vinylDegreesPerSecond : root.cassette ? 9 : root.cdDegreesPerSecond) : 0
-            root.spinSpeed += (target-root.spinSpeed)*Math.min(1,dt*2.2)
-            if (!root.discFlipped) root.spinAngle = (root.spinAngle+root.spinSpeed*dt)%360
-            const winding = root.cassette && root.activeSeekControl
-            const windTarget = winding && now-root.activeSeekControl.lastMove < 120 ? root.activeSeekControl.windDirection * 850 : 0
-            root.tapeWindSpeed += (windTarget-root.tapeWindSpeed)*Math.min(1,dt*18)
-            if (root.cassette && !root.discFlipped && (root.deckPlayer.playing || winding || Math.abs(root.tapeWindSpeed) > .5)) {
-                const position = Math.max(0, Math.min(1, root.cassetteVisualProgress))
-                const speed = winding || Math.abs(root.tapeWindSpeed) > .5 ? root.tapeWindSpeed * 55 : 10000
-                root.cassetteLeftAngle = (root.cassetteLeftAngle - dt * speed / Math.sqrt(1936 + 3993 * (1-position))) % 360
-                root.cassetteRightAngle = (root.cassetteRightAngle - dt * speed / Math.sqrt(1936 + 3993 * position)) % 360
-            }
-            if (root.deckPlayer.playing) root.wavePhase=(root.wavePhase+dt*2.8)%(2*Math.PI)
+    function advanceMediaFrame(seconds, now) {
+        const dt = Math.min(.05, seconds)
+        const target = root.deckPlayer.playing ? (root.vinyl ? root.vinylDegreesPerSecond : root.cassette ? 9 : root.recorder ? 36 : root.cdDegreesPerSecond) : 0
+        root.spinSpeed += (target-root.spinSpeed)*Math.min(1,dt*2.2)
+        if (!root.discFlipped) root.spinAngle = (root.spinAngle+root.spinSpeed*dt)%360
+        const winding = root.cassette && root.activeSeekControl
+        const windTarget = winding && now-root.activeSeekControl.lastMove < 120 ? root.activeSeekControl.windDirection * 850 : 0
+        root.tapeWindSpeed += (windTarget-root.tapeWindSpeed)*Math.min(1,dt*18)
+        if (root.cassette && !root.discFlipped && (root.deckPlayer.playing || winding || Math.abs(root.tapeWindSpeed) > .5)) {
+            const position = Math.max(0, Math.min(1, root.cassetteVisualProgress))
+            const speed = winding || Math.abs(root.tapeWindSpeed) > .5 ? root.tapeWindSpeed * 55 : 10000
+            root.cassetteLeftAngle = (root.cassetteLeftAngle - dt * speed / Math.sqrt(1936 + 3993 * (1-position))) % 360
+            root.cassetteRightAngle = (root.cassetteRightAngle - dt * speed / Math.sqrt(1936 + 3993 * position)) % 360
         }
+        if (root.deckPlayer.playing) root.wavePhase=(root.wavePhase+dt*2.8)%(2*Math.PI)
+    }
+    // Advance with Qt's animation frame clock, using seconds rather than a
+    // fixed 16 ms timer. Qt's render loop follows the active display's cadence.
+    FrameAnimation {
+        objectName: "mediaFrameAnimation"
+        running: root.animate && root.visible && root.visibility !== Window.Minimized && platformNative.exposed && (root.deckPlayer.playing || root.spinSpeed > .02 || root.activeSeekControl || Math.abs(root.tapeWindSpeed) > .5)
+        onTriggered: root.advanceMediaFrame(frameTime, Date.now())
     }
     Connections {
         target: root.deckPlayer
@@ -563,7 +588,7 @@ ApplicationWindow {
         id: badge
         objectName: "sourceBar"
         visible: !root.miniMode
-        x: 265 - width / 2; y: 13; width: platformNative.hyprland ? 256 : 344; height: 48; radius: 24
+        x: (root.playerWidth - width) / 2; y: 13; width: platformNative.hyprland ? 256 : 344; height: 48; radius: 24
         color: root.surface
         border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
@@ -638,12 +663,13 @@ ApplicationWindow {
     Item {
         id: mediaSurface
         objectName: "mediaSurface"
+        x: root.wideMixer ? (root.playerWidth - 530) / 2 : 0
         opacity: root.threeDActive ? 0 : 1
         width: 530; height: 530
     PlayerBody {
         objectName: "playerBody"
         x: 45; y: 74; width: 440; height: 440
-        visible: root.bodyVisible && !root.discFlipped
+        visible: root.bodyVisible && !root.recorder && !root.discFlipped
         medium: player.medium; surface: root.surface
     }
     PlayerBody {
@@ -677,7 +703,7 @@ ApplicationWindow {
         }
         // Shadow is circular, so the player keeps its silhouette on any wallpaper.
         Repeater {
-            model: root.cassette ? 0 : 7
+            model: root.cassette || root.recorder ? 0 : 7
             Rectangle {
                 required property int index
                 anchors.centerIn: parent
@@ -695,7 +721,7 @@ ApplicationWindow {
             transform: Translate { x: root.outgoingOffset }
             sourceComponent: Item {
                 Disc { cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl; anchors.fill: parent; artwork: presentation.outgoing; rotation: root.cassette ? 0 : root.outgoingAngle }
-                Disc { visible: !root.cassette; cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                Disc { visible: !root.cassette && !root.recorder; cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
                 Loader { anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root; outgoing: true } }
             }
         }
@@ -719,12 +745,13 @@ ApplicationWindow {
                     anchors.fill: parent
                     Disc { cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl;
                         id: face
+                        visible: !root.recorder
                         objectName: "discFace"
                         anchors.fill: parent
                         artwork: presentation.artwork
                         rotation: root.cassette ? 0 : root.spinAngle
                     }
-                    Disc { visible: !root.cassette; cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
+                    Disc { visible: !root.cassette && !root.recorder; cassette: root.cassette; shellColor: root.cassetteShell; vinyl: root.vinyl; anchors.fill: parent; overlay: true }
                     Loader {
                         anchors.fill: parent; active: root.recordMap !== null
                         sourceComponent: Canvas {
@@ -743,6 +770,7 @@ ApplicationWindow {
                             }
                         }
                     }
+                    Loader { id: recorderLoader; objectName: "recorderLoader"; anchors.fill: parent; transformOrigin: Item.TopLeft; scale: root.tx6Visible? 0.85:1; transform: Translate { x: root.tx6Visible?-65:0; y: root.tx6Visible?39:0 } active: root.recorder; sourceComponent: Recorder { app: root } }
                     Loader { objectName: "cassetteReelsLoader"; anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root } }
                 }
                 back: Item {
@@ -1022,6 +1050,7 @@ ApplicationWindow {
                             onClicked: { lyricList.following = true; lyricList.followLine() }
                         }
                         IconButton {
+                            id: lyricsViewButton
                             objectName: "lyricsViewButton"
                             width: 36; height: 36; glyphName: root.lyricsView ? "queue" : "lyrics"
                             tip: root.lyricsView ? "Album tracks · Y" : "Lyrics · Y"
@@ -1096,7 +1125,7 @@ ApplicationWindow {
                 // The presenter has already installed the new outgoing image.
                 // Stop the old sequence without releasing that new image.
                 discSwap.stop(); root.resetSwap()
-                if (!root.animate || root.discFlipped || !root.visible || !platformNative.exposed) { presentation.releaseOutgoing(); return }
+                if (!root.animate || root.recorder || root.discFlipped || !root.visible || !platformNative.exposed) { presentation.releaseOutgoing(); return }
                 scrubber.cancelScrub(); root.outgoingAngle = root.spinAngle; root.outgoingCassetteLeftAngle = root.cassetteLeftAngle; root.outgoingCassetteRightAngle = root.cassetteRightAngle
                 root.swapOffset = 440; root.outgoingOffset = 0; root.outgoingOpacity = 1; root.incomingOpacity = 0
                 root.packageOpacity = root.bodyVisible ? 1 : 0
@@ -1127,7 +1156,7 @@ ApplicationWindow {
         ProgressRing {
             objectName: "progressRing"
             anchors.fill: parent
-            visible: !root.cassette && !(root.bodyVisible && root.discFlipped) && root.deckPlayer.count > 0
+            visible: !root.cassette && !root.recorder && !(root.bodyVisible && root.discFlipped) && root.deckPlayer.count > 0
             progress: root.recordVisualProgress
             phase: root.wavePhase
             amplitude: root.deckPlayer.playing ? 2.8 : 0
@@ -1138,6 +1167,7 @@ ApplicationWindow {
             id: scrubber
             objectName: "scrubber"
             preventStealing: true
+            enabled: !root.recorder || root.discFlipped
             anchors.fill: parent
             // Reverse-side lyrics keep their hover input; the rim remains seekable.
             containmentMask: QtObject { function contains(point: point): bool { return !root.discFlipped || scrubber.onRim(point.x, point.y) } }
@@ -1148,7 +1178,7 @@ ApplicationWindow {
             readonly property bool canSeek: !root.swapRunning && root.deckPlayer.duration > 0 && (!root.useCider || (root.ciderService.canSeek && !root.listeningService.busy))
             readonly property bool showPreview: canSeek && (scrubbing || (containsMouse && onRim(mouseX,mouseY)))
             cursorShape: canSeek && onRim(mouseX,mouseY) ? Qt.PointingHandCursor : Qt.ArrowCursor
-            function onRim(x,y) { let r=Math.hypot(x-220,y-220); return !root.cassette && !(root.bodyVisible && root.discFlipped) && r > 205 && r < 224 }
+            function onRim(x,y) { let r=Math.hypot(x-220,y-220); return !root.cassette && !root.recorder && !(root.bodyVisible && root.discFlipped) && r > 205 && r < 224 }
             function updatePreview(x,y) {
                 let a=Math.atan2(y-220,x-220)+Math.PI/2
                 if (a < 0) a += 2*Math.PI
@@ -1160,7 +1190,7 @@ ApplicationWindow {
                 const pointer=previewFraction
                 let delta=pointer-lastFraction
                 if(delta>.5)delta-=1;else if(delta < -.5)delta+=1
-                previewFraction=Math.max(0,Math.min(1,previous+delta*(fine?.1:1)))
+                previewFraction=Math.max(0,Math.min(1,previous+delta*(fine? 0.1:1)))
                 lastFraction=pointer
             }
             function cancelScrub() { scrubbing = false }
@@ -1205,10 +1235,47 @@ ApplicationWindow {
     PlayerBody {
         objectName: "playerLid"
         x: 45; y: 74; width: 440; height: 440
-        visible: root.bodyVisible && !root.discFlipped && !root.threeDActive
+        visible: root.bodyVisible && !root.recorder && !root.discFlipped && !root.threeDActive
         medium: player.medium; surface: root.surface; part: 1
-        opacity: 1 - .75*root.lidOpen
-        transform: Scale { origin.x: 220; origin.y: root.cassette ? 112 : 26; yScale: 1 - .35*root.lidOpen }
+        opacity: 1 - .75*(root.cassette && root.cassetteControls ? root.cassetteControls.doorAngle/58 : root.cd && root.cdControls ? root.cdControls.doorAngle/70 : root.lidOpen)
+        transform: Scale { origin.x: 220; origin.y: root.cassette ? 358 : 26; yScale: 1 - .35*(root.cassette && root.cassetteControls ? root.cassetteControls.doorAngle/58 : root.cd && root.cdControls ? root.cdControls.doorAngle/70 : root.lidOpen) }
+    }
+    Canvas {
+        id: tx6CableFlat
+        visible: root.tx6Visible && !root.threeDActive
+        width: 530; height: 200
+        onVisibleChanged: requestPaint()
+        onPaint: {
+            const c=getContext("2d");c.reset();if(!visible)return;
+            // Same top-edge USB-C sockets as the 3D cable.
+            c.lineCap="round";c.strokeStyle="#85000000";c.lineWidth=5;
+            c.beginPath();c.moveTo(232,141);c.bezierCurveTo(186,23,495,23,471,138);c.stroke();
+            c.strokeStyle="#252e32";c.lineWidth=3.2;c.beginPath();c.moveTo(232,140);c.bezierCurveTo(186,22,495,22,471,137);c.stroke();
+            c.strokeStyle="#728086";c.lineWidth=.55;c.stroke();
+            c.fillStyle="#c4cace";c.fillRect(224,139,16,10);c.fillRect(463,138,16,10);
+            c.fillStyle="#e1e2df";c.fillRect(223,130,18,14);c.fillRect(462,128,18,14);
+        }
+    }
+    Loader {
+        id: tx6Loader
+        x: 295; y: 146; width: 244; height: 400; scale: .85; transformOrigin: Item.TopLeft
+        active: root.recorder && tx6.visible && !root.miniMode
+        visible: root.tx6Visible
+        opacity: root.threeDActive ? 0 : 1
+        enabled: !root.threeDActive
+        sourceComponent: Tx6Controls { app: root }
+    }
+    Loader {
+        id: cdControlsLoader
+        width: 530; height: 530
+        active: root.cd && root.bodyVisible && !root.discFlipped
+        sourceComponent: CdControls { app: root }
+    }
+    Loader {
+        id: cassetteControlsLoader
+        width: 530; height: 530
+        active: root.cassette && root.bodyVisible && !root.discFlipped
+        sourceComponent: CassetteControls { app: root }
     }
     Rectangle {
         id: rimPreview
@@ -1226,14 +1293,35 @@ ApplicationWindow {
     Loader {
         id: scene3D
         objectName: "scene3DLoader"
-        x: 0; y: 60; width: 530; height: 470
+        x: 0; y: 60; width: root.playerWidth; height: 470 + root.mixerHeightExtra
         active: root.threeDRequested
-        onActiveChanged: if(active)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
-        Component.onCompleted: if(active)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
+        onActiveChanged: if(active && !source.toString().length)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
+        Component.onCompleted: if(active && !source.toString().length)setSource(player3DUrl, {app: root, surfaceItem: mediaSurface})
+    }
+    Button {
+        id: mixerToggle
+        objectName: "tx6Toggle"
+        // The visible pill keeps its position; the surrounding target is 48 px.
+        x: root.playerWidth - 102; y: 73; width: 74; height: 48
+        hoverEnabled: true; focusPolicy: Qt.StrongFocus
+        Accessible.name: "TX-6 mixer extension"
+        Accessible.description: checked ? "Hide the mixer" : "Show the mixer next to TP-7"
+        visible: root.recorder && !root.miniMode && !root.discFlipped
+        text: "TX–6"; checkable: true; checked: tx6.visible
+        onClicked: tx6.visible=checked
+        background: Rectangle {
+            y: 10; height: 28; radius: 14
+            color: mixerToggle.checked ? root.inset : Qt.alpha(root.surface,.85)
+            border.width: mixerToggle.visualFocus ? 2 : .6
+            border.color: mixerToggle.visualFocus ? root.accent : Qt.alpha(root.mutedInk,.25)
+            SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: mixerToggle.hovered; pressed: mixerToggle.down; focused: mixerToggle.visualFocus }
+        }
+        SpunToolTip { visible: mixerToggle.hovered; text: mixerToggle.checked ? "Hide TX-6 mixer" : "Show TX-6 mixer" }
+        contentItem: SpunText { text: parent.text; color: parent.checked?root.accent:root.mutedInk; font.pixelSize:12; horizontalAlignment:Text.AlignHCenter; verticalAlignment:Text.AlignVCenter }
     }
     DropArea {
         objectName: "threeDMediaDrop"
-        x: 0; y: 60; width: 530; height: 470
+        x: 0; y: 60; width: root.playerWidth; height: 470 + root.mixerHeightExtra
         enabled: root.threeDActive
         onEntered: drag => { if(!drag.hasUrls && !drag.hasText)drag.accepted=false }
         onDropped: drop => root.receiveMediaDrop(drop)
@@ -1279,7 +1367,7 @@ ApplicationWindow {
         id: deck
         objectName: "playerDeck"
         visible: !root.miniMode
-        x: 62; y: 533; width: 406; height: 144 + (root.showHorizontalSeek ? 28 : 0); radius: SpunStyle.panelRadius
+        x: (root.playerWidth - width) / 2; y: 533 + root.mixerHeightExtra; width: 406; height: 144 + (root.showHorizontalSeek ? 28 : 0); radius: SpunStyle.panelRadius
         color: root.surface; border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
         SpunText {
@@ -1355,7 +1443,8 @@ ApplicationWindow {
     }
 
     SpunText {
-        x: 65; y: 705; width: 400; horizontalAlignment: Text.AlignHCenter
+        objectName: "demoHint"
+        x: deck.x + 3; y: 705 + root.mixerHeightExtra; width: 400; horizontalAlignment: Text.AlignHCenter
         visible: !root.miniMode
         text: root.useCider || player.count ? "" : "Play demo"
         color: root.mutedInk; font.pixelSize: SpunStyle.caption
@@ -1365,7 +1454,7 @@ ApplicationWindow {
     Rectangle {
         id: jewelCase
         objectName: "queuePanel"
-        x: 534; width: 310; anchors.top: badge.top; anchors.bottom: deck.bottom; radius: SpunStyle.panelRadius
+        x: root.playerWidth + 4; width: 310; anchors.top: badge.top; anchors.bottom: deck.bottom; radius: SpunStyle.panelRadius
         visible: root.queueOpen; color: root.surface; border.width: 0
         transform: Translate { id: queueEntrance; x: 0 }
         onVisibleChanged: {
@@ -1739,7 +1828,7 @@ ApplicationWindow {
     function renameQueue(queue, service) { saveQueuePopup.service = service; saveQueuePopup.renameTarget = queue; saveQueuePopup.open() }
     function confirmDeleteQueue(id, service) { deleteQueuePopup.queueId = id; deleteQueuePopup.service = service; deleteQueuePopup.open() }
     Menu {
-        id: savedQueueMenu; parent: jewelCase; x: 30; y: 64; width: 264; padding: 8; popupType: Popup.Item
+        id: savedQueueMenu; onOpened: root.focusFirstMenuItem(savedQueueMenu); parent: jewelCase; x: 30; y: 64; width: 264; padding: 8; popupType: Popup.Item
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
@@ -1791,7 +1880,7 @@ ApplicationWindow {
         id: queueMenu
         objectName: "queueEditMenu"
         readonly property bool batch: root.queueSelectionCount > 0
-        onOpened: { if (!batch && root.useCider && rowIndex >= 0 && rowIndex < root.ciderService.queue.length) library.prepareRadio(root.ciderService.queue[rowIndex]) }
+        onOpened: { root.focusFirstMenuItem(queueMenu); if (!batch && root.useCider && rowIndex >= 0 && rowIndex < root.ciderService.queue.length) library.prepareRadio(root.ciderService.queue[rowIndex]) }
         property int rowIndex: -1
         property int revision: -1
         popupType: Popup.Item
@@ -1975,6 +2064,16 @@ ApplicationWindow {
         }
         IconButton { id: noticeDismiss; objectName: "dismissActionNotice"; visible: !actionNotice.importing; anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter; glyphName: "close"; tip: "Dismiss"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: actionNotice.dismiss() }
     }
+    function focusFirstMenuItem(popup) {
+        for (let i = 0; i < popup.count; ++i) {
+            const entry = popup.itemAt(i)
+            if (entry && entry.visible && entry.enabled && entry.text !== undefined) {
+                popup.currentIndex = i
+                entry.forceActiveFocus(Qt.PopupFocusReason)
+                return
+            }
+        }
+    }
     component SettingsAction: MenuEntry { app: root }
     component SettingsGap: MenuSeparator {
         padding: 0
@@ -1992,7 +2091,7 @@ ApplicationWindow {
         background: Rectangle { color: SpunStyle.popup; radius: SpunStyle.popupRadius }
         enter: SpunPopupEnter {}
         exit: Transition { NumberAnimation { property: "opacity"; from: 1; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
-        onOpened: {  if (root.useCider) root.ciderService.refreshModes() }
+        onOpened: { root.focusFirstMenuItem(menu); if (root.useCider) root.ciderService.refreshModes() }
 
         SettingsAction { text: "Add tracks"; glyphName: "plus"; hint: "Ctrl+O"; onTriggered: files.open() }
         SettingsAction { text: "Add music folder"; glyphName: "folder"; hint: "Ctrl+Shift+O"; onTriggered: folder.open() }
@@ -2046,20 +2145,21 @@ ApplicationWindow {
                             width: parent.width; height: 48; spacing: 4
                             Repeater {
                                 id: recordChoices
-                                model: ["CD", "Vinyl", "Cassette"]
+                                model: ["CD", "Vinyl", "Cassette", "TP-7"]
                                 delegate: AbstractButton {
                                     id: recordChoice
                                     required property string modelData
                                     required property int index
-                                    objectName: modelData.toLowerCase() + "StyleButton"
-                                    width: (preferenceItems.width - 8) / 3; height: SpunStyle.target
-                                    text: modelData; checkable: true; autoExclusive: true; checked: player.medium === modelData.toLowerCase(); hoverEnabled: true
+                                    readonly property string mediumId: index===3 ? "tp7" : modelData.toLowerCase()
+                                    objectName: mediumId + "StyleButton"
+                                    width: (preferenceItems.width - 12) / 4; height: SpunStyle.target
+                                    text: modelData; checkable: true; autoExclusive: true; checked: player.medium === mediumId; hoverEnabled: true
                                     Accessible.name: modelData + " appearance"; Accessible.checked: checked
                                     Keys.onLeftPressed: recordChoices.itemAt(Math.max(0,index-1)).forceActiveFocus(Qt.TabFocusReason)
-                                    Keys.onRightPressed: recordChoices.itemAt(Math.min(2,index+1)).forceActiveFocus(Qt.TabFocusReason)
+                                    Keys.onRightPressed: recordChoices.itemAt(Math.min(3,index+1)).forceActiveFocus(Qt.TabFocusReason)
                                     Keys.onReturnPressed: clicked()
                                     Keys.onEnterPressed: clicked()
-                                    onClicked: player.medium = modelData.toLowerCase()
+                                    onClicked: player.medium = mediumId
                                     onActiveFocusChanged: if(activeFocus) preferenceScroll.reveal(this)
                                     background: Rectangle {
                                         radius: 20 * theme.radius; color: "transparent"
@@ -2089,7 +2189,8 @@ ApplicationWindow {
                             onToggled: player.threeD = checked
                             onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)
                         }
-                        PreferenceSwitch { objectName: "playerBodyToggle"; app: root; width: parent.width; visible: !supports3D || !player.threeD; height: visible ? implicitHeight : 0; text: "Show player body"; glyphName: "disc"; checked: player.showPlayerBody; onToggled: player.showPlayerBody = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "tx6Preference"; app: root; width: parent.width; visible: root.recorder; height: visible?implicitHeight:0; text: "TX-6 mixer extension"; glyphName: "volume"; checked: tx6.visible; onToggled:tx6.visible=checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "playerBodyToggle"; app: root; width: parent.width; visible: !root.recorder && (!supports3D || !player.threeD); height: visible ? implicitHeight : 0; text: "Show player body"; glyphName: "disc"; checked: player.showPlayerBody; onToggled: player.showPlayerBody = checked; onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this) }
                         Row {
                             visible: root.cassette; height: visible ? 40 : 0; spacing: 6; width: parent.width
                             Repeater {
@@ -2137,7 +2238,7 @@ ApplicationWindow {
                                         required property string modelData
                                         required property int index
                                         objectName: "vinylSpeed" + index
-                                        width: (preferenceItems.width - 8) / 3; height: 40
+                                        width: (preferenceItems.width - 12) / 4; height: 40
                                         text: modelData; checkable: true; autoExclusive: true; tonal: checked; checked: player.vinylSpeed === [0,33,45][index]
                                         onClicked: player.vinylSpeed = [0,33,45][index]
                                         onActiveFocusChanged: if(activeFocus)preferenceScroll.reveal(this)

@@ -10,6 +10,11 @@ Item {
     readonly property bool engaged: visible && app.deckPlayer.count > 0 && ((app.deckPlayer.playing && !app.swapRunning) || landing || app.seekPreviewActive)
     readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool dragging: false
+    readonly property real pivotX: app.threeDActive ? 455 : 378
+    readonly property real pivotY: app.threeDActive ? 80 : 100
+    readonly property real armLength: app.threeDActive ? 280 : 197
+    readonly property real startAngle: app.threeDActive ? 20 : 6
+    readonly property real angleRange: app.threeDActive ? 22 : 20
     property real dragAngle: -4
     property real rawAngle: -4
     property real lastPointerAngle: 0
@@ -18,10 +23,10 @@ Item {
     property bool wasPlaying: false
     property bool landing: false
     property real landingProgress: 0
-    readonly property real previewProgress: Math.max(0, Math.min(1, (rawAngle - 6) / 20))
+    readonly property real previewProgress: Math.max(0, Math.min(1, (rawAngle - startAngle) / angleRange))
     property real lowered: dragging ? .12 : engaged ? 1 : 0
     property real groove: Math.max(0, Math.min(1, app.recordVisualProgress))
-    property real armAngle: dragging ? dragAngle : engaged ? 6 + 20 * groove : -4
+    property real armAngle: dragging ? dragAngle : engaged ? startAngle + angleRange * groove : -4
     Behavior on armAngle {
         enabled: arm.motion && !arm.app.seekPreviewActive
         SpringAnimation { id: angleSpring; spring: 6; damping: .55; epsilon: .01 }
@@ -33,7 +38,7 @@ Item {
     }
     function dropNeedle() {
         if (!dragging) return
-        const valid = canSeek && dragTrack === app.cassetteTrackIdentity && rawAngle >= 4 && rawAngle <= 28 && pointerDistance > 120 && pointerDistance < 290
+        const valid = canSeek && dragTrack === app.cassetteTrackIdentity && rawAngle >= startAngle-2 && rawAngle <= startAngle+angleRange+2 && pointerDistance > armLength*.6 && pointerDistance < armLength*1.5
         const position = previewProgress
         if (!valid) { dragging = false; return }
         landingProgress = position; landing = true; landingTimeout.restart()
@@ -192,7 +197,7 @@ Item {
         onActiveFocusChanged: if (!activeFocus) pointerFocus = false
         readonly property point tip: {
             const angle = arm.armAngle * Math.PI / 180
-            return Qt.point(378 - 197 * Math.sin(angle), 100 + 197 * Math.cos(angle))
+            return Qt.point(arm.pivotX - arm.armLength * Math.sin(angle), arm.pivotY + arm.armLength * Math.cos(angle))
         }
         containmentMask: QtObject {
             function contains(point: point): bool { return Math.hypot(point.x - needleHit.tip.x, point.y - needleHit.tip.y) <= 27 }
@@ -206,22 +211,22 @@ Item {
             pointerFocus = true
             forceActiveFocus()
             arm.dragAngle = arm.armAngle; arm.rawAngle = arm.armAngle
-            arm.lastPointerAngle = Math.atan2(378 - mouse.x, mouse.y - 100) * 180 / Math.PI
+            arm.lastPointerAngle = Math.atan2(arm.pivotX - mouse.x, mouse.y - arm.pivotY) * 180 / Math.PI
             arm.dragTrack = arm.app.cassetteTrackIdentity; arm.wasPlaying = arm.app.deckPlayer.playing
-            arm.pointerDistance = Math.hypot(mouse.x - 378, mouse.y - 100)
+            arm.pointerDistance = Math.hypot(mouse.x - arm.pivotX, mouse.y - arm.pivotY)
             arm.dragging = true; arm.landing = false; landingTimeout.stop()
             if (arm.wasPlaying) arm.app.deckPlayer.pause()
         }
         function movePointer(mouse) {
             if (!arm.dragging) return
-            const dx = mouse.x - 378, dy = mouse.y - 100
+            const dx = mouse.x - arm.pivotX, dy = mouse.y - arm.pivotY
             arm.pointerDistance = Math.hypot(dx, dy)
             const pointer = Math.atan2(-dx, dy) * 180 / Math.PI
             let delta=pointer-arm.lastPointerAngle
             if(delta>180)delta-=360;else if(delta < -180)delta+=360
             arm.rawAngle += delta * ((mouse.modifiers & Qt.ShiftModifier) ? 0.1 : 1)
             arm.lastPointerAngle=pointer
-            arm.dragAngle = Math.max(-8, Math.min(38, arm.rawAngle))
+            arm.dragAngle = Math.max(-8, Math.min(arm.startAngle+arm.angleRange+12, arm.rawAngle))
         }
         function endPointer() { hintDismissed = true; arm.dropNeedle() }
         function cancelPointer() { hintDismissed = true; arm.cancelDrag(true) }

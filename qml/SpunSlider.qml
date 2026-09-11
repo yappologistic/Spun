@@ -10,6 +10,19 @@ Slider {
     focusPolicy: Qt.StrongFocus
     property bool previewing: false
     property string valueText: Math.round(value * 100) + "%"
+    Accessible.description: valueText
+    // Qt's horizontal Slider handles Left/Right; M3 also supports Up/Down
+    // and endpoints. Emit moved only for a user change, as pointer input does.
+    Keys.onUpPressed: { const before=value; increase(); if(value!==before)moved() }
+    Keys.onDownPressed: { const before=value; decrease(); if(value!==before)moved() }
+    Keys.onPressed: event => {
+        if(event.key===Qt.Key_Home || event.key===Qt.Key_End) {
+            const before=value
+            platformNative.setSliderEndpoint(control,event.key===Qt.Key_End)
+            if(value!==before)moved()
+            event.accepted=true
+        } else event.accepted=false
+    }
     background: Item {
         x: control.leftPadding; y: control.topPadding
         width: control.availableWidth; height: control.availableHeight

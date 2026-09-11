@@ -12,7 +12,7 @@ void PlayerBody::paint(QPainter *p) {
     const bool tape=m_medium=="cassette",cd=m_medium=="cd";
     const auto metal=[&](const QRectF &r,qreal radius){
         // Broad face, rounded bevel and a dark underside share one light source.
-        const QColor base=m_surface;
+        const QColor base=(tape||cd)?QColor("#bfc7ce"):m_surface;
         p->setPen(Qt::NoPen);p->setBrush(base.darker(210));
         p->drawRoundedRect(r,radius,radius);
         QLinearGradient edge(r.topLeft(),r.bottomRight());
@@ -53,7 +53,11 @@ void PlayerBody::paint(QPainter *p) {
         p->setPen(Qt::NoPen);p->setBrush(QColor(0,0,0,100));p->drawRoundedRect(r.translated(2,5),5,5);
         metal(r,cd?5:2);
         const QRectF cover=r.adjusted(cd?18:5,5,-5,-5);
-        if(!m_artwork.isNull()) {
+        if(m_layer==3) {
+            // The reverse carries themed text, unlike the silver hardware or
+            // artwork sleeve. Keep its ink paired with an opaque theme surface.
+            p->fillRect(cover,m_surface);
+        } else if(!m_artwork.isNull()) {
             const auto side=qMin(m_artwork.width(),m_artwork.height());
             p->drawImage(cover,m_artwork,QRectF((m_artwork.width()-side)/2.,(m_artwork.height()-side)/2.,side,side));
         }
@@ -65,7 +69,31 @@ void PlayerBody::paint(QPainter *p) {
             p->setPen(QPen(QColor(0,0,0,65),1));p->drawLine(r.topRight()-QPointF(2,0),r.bottomRight()-QPointF(2,0));
         }
         QLinearGradient gloss(r.topLeft(),r.bottomRight());gloss.setColorAt(0,QColor(255,255,255,cd?40:12));gloss.setColorAt(.48,Qt::transparent);gloss.setColorAt(.5,QColor(255,255,255,cd?16:4));gloss.setColorAt(1,Qt::transparent);
-        p->fillRect(r.adjusted(1,1,-1,-1),gloss);return;
+        if(m_layer!=3)p->fillRect(r.adjusted(1,1,-1,-1),gloss);
+        return;
+    }
+    if(cd) {
+        const QRectF body(10,10,420,408),window(20,20,400,392);
+        if(m_layer==1) {
+            QPainterPath glass;glass.addRoundedRect(window,4,4);
+            QLinearGradient reflection(window.topLeft(),window.bottomRight());
+            reflection.setColorAt(0,QColor(232,243,248,20));reflection.setColorAt(.43,QColor(232,243,248,3));
+            reflection.setColorAt(.44,QColor(245,252,255,17));reflection.setColorAt(1,QColor(26,42,49,9));
+            p->fillPath(glass,reflection);glassEdge(glass);
+            hinge(QRectF(75,17,28,7));hinge(QRectF(337,17,28,7));
+            return;
+        }
+        p->setPen(Qt::NoPen);p->setBrush(QColor(0,0,0,55));p->drawRoundedRect(body.translated(1,4),7,7);
+        metal(body,7);
+        p->setPen(QPen(QColor("#76848d"),.7));p->setBrush(QColor("#aeb9c0"));p->drawRoundedRect(window,4,4);
+        QRandomGenerator grain(731);
+        p->save();p->setClipRect(window);
+        for(int i=0;i<2200;++i){p->setPen(QPen(QColor(255,255,255,i%3?8:14),.4));const QPointF a(20+400*grain.generateDouble(),20+392*grain.generateDouble());p->drawLine(a,a+QPointF(3.5,0));}
+        p->restore();
+        p->setPen(QPen(QColor("#5c6971"),2));p->setBrush(QColor("#13191d"));p->drawEllipse(QPointF(220,220),187,187);
+        p->setPen(QPen(QColor("#d0d8dd"),.7));p->setBrush(Qt::NoBrush);p->drawEllipse(QPointF(220,220),188.5,188.5);
+        for(QPointF at:{QPointF(29,29),QPointF(411,29),QPointF(29,400),QPointF(411,400)})screw(at);
+        return;
     }
     if(m_layer==1) {
         if(m_medium=="vinyl") {
@@ -78,7 +106,7 @@ void PlayerBody::paint(QPainter *p) {
             p->setBrush(spindle);p->drawEllipse(QPointF(220,220),4.5,5.5);return;
         }
         QPainterPath glass;
-        if(tape)glass.addRoundedRect(QRectF(42,112,356,225),12,12);
+        if(tape)glass.addRoundedRect(QRectF(27,91,386,266),6,6);
         else glass.addEllipse(QPointF(220,220),194,194);
         QLinearGradient g(60,70,345,365);g.setColorAt(0,QColor(219,237,244,32));g.setColorAt(.32,QColor(200,220,230,2));g.setColorAt(.33,QColor(243,250,255,22));g.setColorAt(.48,QColor(235,247,255,4));g.setColorAt(1,QColor(8,12,18,30));
         p->fillPath(glass,g);glassEdge(glass);
@@ -87,7 +115,7 @@ void PlayerBody::paint(QPainter *p) {
         p->setPen(QPen(QColor(241,246,247,13),.45));
         for(int i=0;i<11;++i){const double x=65+i*27;const double y=tape?124+(i%4)*4:71+(i%4)*5;p->drawLine(QPointF(x,y),QPointF(x+12+(i%3)*6,y-2));}
         p->restore();
-        if(tape){hinge(QRectF(80,107,31,8));hinge(QRectF(329,107,31,8));metal(QRectF(195,334,50,9),3);}
+        if(tape){hinge(QRectF(66,353,31,8));hinge(QRectF(329,353,31,8));}
         else{
             hinge(QRectF(159,26,24,8));hinge(QRectF(257,26,24,8));
             QConicalGradient clamp(QPointF(220,220),25);clamp.setColorAt(0,QColor("#b8bfc0"));clamp.setColorAt(.4,QColor("#45494d"));clamp.setColorAt(.7,QColor("#dae0df"));clamp.setColorAt(1,QColor("#b8bfc0"));
@@ -101,8 +129,8 @@ void PlayerBody::paint(QPainter *p) {
     const QRectF body=tape?QRectF(19,83,402,283):QRectF(6,6,428,428);
     p->setPen(Qt::NoPen);
     for(int i=6;i>0;--i){p->setBrush(QColor(0,0,0,7));p->drawRoundedRect(body.adjusted(-i,-i,i,i).translated(0,3),cd?220:23,cd?220:23);}
-    metal(body,cd?214:22);
-    p->save();QPainterPath face;face.addRoundedRect(body.adjusted(3,3,-3,-7),cd?211:20,cd?211:20);p->setClipPath(face);
+    metal(body,cd?214:tape?7:22);
+    p->save();QPainterPath face;face.addRoundedRect(body.adjusted(3,3,-3,-7),cd?211:tape?5:20,cd?211:tape?5:20);p->setClipPath(face);
     QRandomGenerator grain(317);
     for(int i=0;i<2600;++i){
         const double x=body.left()+grain.generateDouble()*body.width(),y=body.top()+grain.generateDouble()*body.height();

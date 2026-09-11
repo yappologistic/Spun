@@ -1,4 +1,5 @@
 #include "player.h"
+#include "tx6.h"
 #include "artwork.h"
 #include <QDir>
 #include <QDirIterator>
@@ -40,7 +41,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_repeat = qBound(0, m_settings.value("repeat", 0).toInt(), 2);
     m_light = m_settings.value("light", false).toBool();
     m_medium=m_settings.value("medium",m_settings.value("vinyl",false).toBool()?"vinyl":"cd").toString();
-    if(!QStringList{"cd","vinyl","cassette"}.contains(m_medium))m_medium="cd";
+    if(!QStringList{"cd","vinyl","cassette","tp7"}.contains(m_medium))m_medium="cd";
     m_threeD=m_settings.value("threeD",false).toBool();
     m_cd500Rpm=m_settings.value("cd500Rpm",false).toBool();
     m_vinylSpeed=m_settings.value("vinylSpeed",33).toInt();
@@ -92,6 +93,10 @@ Player::~Player() {
     m_importJob.waitForFinished();
     save();
     if (m_preparingAudio) m_audioPreparation.waitForFinished();
+    // QAudioBufferOutput detaches itself from its player during destruction.
+    // Keep that player alive until the tap is gone, including after bypass.
+    if(m_media){m_media->stop();m_media->setAudioBufferOutput(nullptr);}
+    m_mixOutput.reset();
     // No worker keeps a Player pointer. Finish its bounded cache write before exit.
     if (m_artJobActive) {
         m_artLoader.waitForFinished();
@@ -105,6 +110,7 @@ void Player::ensureMedia() {
     m_audio->setVolume(m_volume);
     m_media = std::make_unique<QMediaPlayer>();
     m_media->setAudioOutput(m_audio.get());
+    refreshMixerRoute();
     connect(m_media.get(), &QMediaPlayer::playbackStateChanged, this, &Player::playingChanged);
     connect(m_media.get(), &QMediaPlayer::positionChanged, this, &Player::positionChanged);
     connect(m_media.get(), &QMediaPlayer::durationChanged, this, &Player::durationChanged);
@@ -473,7 +479,7 @@ void Player::setMiniMode(bool value) { if (m_miniMode == value) return; m_miniMo
 void Player::setBackgroundBlur(bool value) { if (m_backgroundBlur == value) return; m_backgroundBlur = value; emit backgroundBlurChanged(); save(); }
 void Player::setVinyl(bool value) { setMedium(value?"vinyl":"cd"); }
 void Player::setMedium(const QString &value) {
-    if(m_medium==value || !QStringList{"cd","vinyl","cassette"}.contains(value))return;
+    if(m_medium==value || !QStringList{"cd","vinyl","cassette","tp7"}.contains(value))return;
     const bool wasVinyl=vinyl();m_medium=value;emit mediumChanged();if(wasVinyl!=vinyl())emit vinylChanged();save();
 }
 void Player::setShowPlayerBody(bool value) { if(value==m_showPlayerBody)return;m_showPlayerBody=value;emit settingsChanged();save(); }
@@ -565,4 +571,16 @@ QString Player::albumKey() const {
     if(m_index<0)return {};
     const auto &t=m_tracks[m_index];
     return t.album.isEmpty() ? t.path : t.album+"|"+(t.albumArtist.isEmpty() ? QFileInfo(t.path).absolutePath() : t.albumArtist);
+}
+
+void Player::attachMixer(Tx6 *mixer) { m_mixer=mixer;refreshMixerRoute(); }
+void Player::refreshMixerRoute() {
+    if(!m_media)return;
+    const bool active=m_mixer&&m_mixer->active();
+    if(active&&!m_mixOutput){
+        m_mixOutput=std::make_unique<QAudioBufferOutput>(Tx6::format());
+        connect(m_mixOutput.get(),&QAudioBufferOutput::audioBufferReceived,this,[this](const QAudioBuffer &buffer){if(m_mixer)m_mixer->consume(buffer);});
+    }
+    m_media->setAudioBufferOutput(active?m_mixOutput.get():nullptr);
+    m_audio->setMuted(active);
 }
