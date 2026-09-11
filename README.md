@@ -63,7 +63,7 @@ NIXPKGS_ALLOW_UNFREE=1 nix build --impure .
 nix develop
 ```
 
-The license is noncommercial, so Nix requires an explicit unfree-package opt-in. The flake supports x86_64 and aarch64 Linux. NixOS configurations can add `spun.packages.${pkgs.stdenv.hostPlatform.system}.default` to `environment.systemPackages` after adding Spun as a flake input and allowing the `spun` package with `nixpkgs.config.allowUnfreePredicate`. Wayland and X11 plugins are included; no display backend is forced.
+The license is noncommercial, so Nix requires an explicit unfree-package opt-in. The flake supports x86_64 and aarch64 Linux. Wayland and X11 plugins are included; no display backend is forced.
 
 </details>
 
