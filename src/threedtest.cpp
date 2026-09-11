@@ -1,3 +1,4 @@
+#include "testcapture.h"
 #include "threedtest.h"
 #include "player.h"
 #include "disc.h"
@@ -13,6 +14,7 @@
 #include <QFile>
 #include <QSaveFile>
 #include <QWheelEvent>
+#include <QVector2D>
 #ifdef SPUN_WITH_3D
 #include <QQuick3DGeometry>
 #endif
@@ -57,7 +59,7 @@ int exerciseThreeD(Player &player,QQuickWindow *window,const QString &temp,const
         QTest::mouseRelease(window,Qt::LeftButton,mods,to);QTest::qWait(60);
     };
     const auto render=[&](const QString &name){
-        const auto frame=window->grabWindow();
+        const auto frame=captureTestWindow(window);
         if(!check(!frame.isNull(),"rendered frame is available"))return;
         const auto sx=frame.width()/double(window->width());const auto scale=window->property("uiScale").toDouble()*sx;
         int opaque=0,total=0;
@@ -134,7 +136,7 @@ int exerciseThreeD(Player &player,QQuickWindow *window,const QString &temp,const
         player.setVinylAlbumMode(album);player.select(0,false);player.seek(0);QTest::qWait(180);
         auto *arm=item("vinylTonearm");auto *needle=item("needleHandle");
         if(!check(arm&&needle,"tonearm exists"))continue;
-        const auto from=project(arm,needle->property("tip").toPointF());const double angle=16*std::acos(-1.)/180.;const auto to=project(arm,QPointF(378-197*std::sin(angle),100+197*std::cos(angle)));
+        const auto from=project(arm,needle->property("tip").toPointF());const double angle=(arm->property("startAngle").toDouble()+arm->property("angleRange").toDouble()*.5)*std::acos(-1.)/180.;const auto to=project(arm,QPointF(arm->property("pivotX").toDouble()-arm->property("armLength").toDouble()*std::sin(angle),arm->property("pivotY").toDouble()+arm->property("armLength").toDouble()*std::cos(angle)));
         auto *bands=window->findChild<QObject*>("threeDTrackBands");
         check(bands&&bands->property("count").toInt()==(album?2:0),"album track boundaries appear only in record mode");
         drag(from,to);check(until([&]{return player.playing()&&player.currentIndex()==(album?1:0)&&std::abs(player.position()-16000)<1800;}),"needle maps song or album position correctly");player.pause();
@@ -229,8 +231,10 @@ int exerciseThreeDLighting(Player &player,QQuickWindow *window,const QString &te
     player.setVolume(0);player.setMotion(false);window->setProperty("useCider",false);player.demo();player.pause();player.setThreeD(true);
     if(!check(until([&]{return window->isExposed()&&window->property("threeDActive").toBool();}),"3D scene is exposed"))return 2;
     QFile palette(temp+"/config/gtk-4.0/noctalia.css");if(!palette.open(QIODevice::ReadOnly))return 2;const auto original=palette.readAll();palette.close();
-    for(const auto &medium:QStringList{"cd","vinyl","cassette"}) {
-        player.setMedium(medium);QTest::qWait(200);double coolBalance=0;
+    auto *mixer=qmlContext(window)->contextProperty("tx6").value<QObject*>();
+    if(!check(mixer!=nullptr,"TX-6 participates in wallpaper lighting checks"))return 2;
+    for(const auto &medium:QStringList{"cd","vinyl","cassette","tp7","tx6"}) {
+        player.setMedium(medium=="tx6"?"tp7":medium);mixer->setProperty("visible",medium=="tx6");QTest::qWait(200);double coolBalance=0;
         for(const auto &accent:QStringList{"#82bed5","#e4a17f","#d9bafa","#916ba8"}) {
             auto css=original;css.replace("#e6b599",accent.toUtf8());
             const bool lightPalette=accent=="#916ba8";
@@ -243,11 +247,11 @@ int exerciseThreeDLighting(Player &player,QQuickWindow *window,const QString &te
             auto *view=findItem(window->contentItem(),"player3DView");QVariant projected;
             // Sample the physical medium, away from artwork labels, controls,
             // accent-colored progress indicators and the tonearm.
-            const QPointF surfacePoint=medium=="cassette"?QPointF(320,369):QPointF(150,349);
+            const QPointF surfacePoint=medium=="cassette"?QPointF(320,369):medium=="tp7"?QPointF(240,325):QPointF(150,349);
             if(!view)return 2;
-            if(lightPalette)check(view->property("caseTint").value<QColor>().lightnessF()>.75,"light Noctalia palette updates the physical enclosure material");
-            QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,projected),Q_ARG(QVariant,surfacePoint.x()),Q_ARG(QVariant,surfacePoint.y()));
-            const auto scenePoint=view->mapToScene(projected.toPointF());const QImage frame=window->grabWindow();
+            if(medium=="tx6")QMetaObject::invokeMethod(view,"projectTx6Face",Q_RETURN_ARG(QVariant,projected),Q_ARG(QVariant,122.),Q_ARG(QVariant,45.));
+            else QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,projected),Q_ARG(QVariant,surfacePoint.x()),Q_ARG(QVariant,surfacePoint.y()));
+            const auto scenePoint=view->mapToScene(projected.toPointF());const QImage frame=captureTestWindow(window);
             if(!check(!frame.isNull(),"lighting test captures rendered pixels"))return 2;
             const double scale=frame.width()/double(window->width());const QPoint center(qRound(scenePoint.x()*scale),qRound(scenePoint.y()*scale));
             double red=0,blue=0;int samples=0;
@@ -259,7 +263,50 @@ int exerciseThreeDLighting(Player &player,QQuickWindow *window,const QString &te
             if(accent=="#e4a17f")check(balance-coolBalance>8,"changing cool to warm visibly changes the material pixels");
             if(!captures.isEmpty()){QDir().mkpath(captures);frame.save(captures+"/"+medium+"-"+accent.mid(1)+".png");}
         }
+        if(medium=="cassette") {
+            for(double fraction:{0.,.5,1.}) {
+                player.seek(qRound64(player.duration()*fraction));QTest::qWait(80);
+                for(int side:{0,1}) {
+                    auto *feed=window->findChild<QObject*>(QString("threeDTapeFeed%1").arg(side));
+                    if(!check(feed!=nullptr,"cassette tape has a physical feed span"))continue;
+                    const auto start=feed->property("start").value<QVector2D>(),end=feed->property("end").value<QVector2D>();
+                    const auto radial=start-QVector2D(side?78.6f:-78.6f,13);
+                    const auto direction=(end-start).normalized();
+                    const auto guide=end-QVector2D(side?143.f:-143.f,-48);
+                    check(radial.length()>33&&radial.length()<60&&std::abs(QVector2D::dotProduct(radial,direction))<.02,
+                          "tape leaves the changing pack tangentially without crossing the reel");
+                    check(std::abs(guide.length()-10)<.01&&std::abs(QVector2D::dotProduct(guide,direction))<.02,
+                          "tape meets the guide roller at its surface");
+                }
+            }
+            player.seek(player.duration()/2);
+            for(const QString &finish:{QString("clear"),QString("smoke"),QString("cream")}) {
+                player.setCassetteFinish(finish);QTest::qWait(180);
+                const auto frame=captureTestWindow(window);check(!frame.isNull(),"cassette finish renders with its transport details");
+                if(!captures.isEmpty())frame.save(captures+"/cassette-"+finish+".png");
+            }
+        }
+        if(medium=="cd"||medium=="cassette") {
+            for(double fraction:{0.,.5,1.}) {
+                if(medium=="cassette"||medium=="cd") {
+                    auto *controls=findItem(window->contentItem(),medium=="cd"?"cdControls":"cassetteControls");
+                    if(!check(controls!=nullptr,"door controls are available"))return 2;
+                    controls->setProperty("doorAngle",fraction*(medium=="cd"?70:58));
+                }
+                window->setProperty("lidOpen",fraction);QTest::qWait(150);
+                auto *view=findItem(window->contentItem(),"player3DView");QVariant projected;
+                if(!view)return 2;
+                QMetaObject::invokeMethod(view,"lidBounds",Q_RETURN_ARG(QVariant,projected));
+                const auto bounds=projected.toRectF();
+                check(bounds.left()>=0&&bounds.top()>=0&&bounds.right()<=view->width()&&bounds.bottom()<=view->height(),
+                      "detailed lid stays inside the player throughout opening");
+                const auto frame=captureTestWindow(window);check(!frame.isNull(),"open lid renders without losing the scene");
+                if(!captures.isEmpty())frame.save(captures+"/"+medium+QString("-lid-%1.png").arg(fraction*100));
+            }
+            window->setProperty("lidOpen",0);
+        }
     }
+    mixer->setProperty("visible",false);
     player.setMedium("vinyl");player.setHorizontalSeek(true);player.pause();player.seek(4000);QTest::qWait(180);
     auto *bar=findItem(window->contentItem(),"horizontalSeek");
     auto *arm=findItem(window->contentItem(),"vinylTonearm");
@@ -270,7 +317,7 @@ int exerciseThreeDLighting(Player &player,QQuickWindow *window,const QString &te
             return std::abs(window->property("recordVisualProgress").toDouble()-fraction)<.015
                 && std::abs(view->property("progress").toDouble()-fraction)<.015
                 && std::abs(bar->property("value").toDouble()-fraction)<.015
-                && std::abs(arm->property("armAngle").toDouble()-(6+20*fraction))<.35;
+                && std::abs(arm->property("armAngle").toDouble()-(arm->property("startAngle").toDouble()+arm->property("angleRange").toDouble()*fraction))<.35;
         };
         const QPoint start=bar->mapToScene(QPointF(bar->width()*.25,bar->height()/2)).toPoint();
         QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,start);
