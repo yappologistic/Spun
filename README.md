@@ -50,6 +50,23 @@ You need a C++20 compiler, CMake 3.22+, Ninja, pkg-config, Python 3, Qt 6.8+ wit
 
 </details>
 
+<details>
+<summary>Nix and NixOS</summary>
+
+With Nix flakes enabled, run from the cloned source folder:
+
+```bash
+NIXPKGS_ALLOW_UNFREE=1 nix run --impure .
+# Build without launching:
+NIXPKGS_ALLOW_UNFREE=1 nix build --impure .
+# Development tools:
+nix develop
+```
+
+The license is noncommercial, so Nix requires an explicit unfree-package opt-in. The flake supports x86_64 and aarch64 Linux. NixOS configurations can add `spun.packages.${pkgs.stdenv.hostPlatform.system}.default` to `environment.systemPackages` after adding Spun as a flake input and allowing the `spun` package with `nixpkgs.config.allowUnfreePredicate`. Wayland and X11 plugins are included; no display backend is forced.
+
+</details>
+
 ## Start listening
 
 **Local music:** choose **Local**, then **+** to add tracks, or drop files and folders onto Spun. **More → Add music folder** includes artist and album subfolders. Imports show progress, skip songs already in the queue and can be cancelled without adding a partial import. Directory symlinks inside the folder are not followed. Your music files are not copied or modified. **More → Play demo** plays the included original soundcheck.

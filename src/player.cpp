@@ -450,7 +450,7 @@ void Player::setCover(const QUrl &url) {
     m_tracks[m_index].cover = url.toLocalFile();
     loadArt(); emit queueChanged(); save();
 }
-void Player::demo() { addUrls({QUrl::fromLocalFile(QStringLiteral(SPUN_SOURCE_DIR "/assets/First-Light.flac"))}); }
+void Player::demo() { addUrls({QUrl::fromLocalFile(QStringLiteral(SPUN_DEMO_FILE))}); }
 void Player::setVolume(double value) {
     value = qBound(0., value, 1.);
     if (m_volume == value) return;
