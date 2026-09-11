@@ -42,16 +42,16 @@ Node {
     Texture { id: powder; generateMipmaps: true; mipFilter: Texture.Linear; scaleU: 4; scaleV: 4; textureData: SurfaceTexture { kind: "powder" } }
     Texture { id: fineMetal; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "metal-normal" } }
     Texture { id: paperGrain; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "paper" } }
-    PrincipledMaterial { id: enclosure; baseColor: "#222529"; roughness: .58; metalness: .03; roughnessMap: powder; normalMap: grain; normalStrength: .18 }
-    PrincipledMaterial { id: topFinish; baseColor: "#24272a"; roughness: .54; roughnessMap: powder; normalMap: grain; normalStrength: .24 }
+    PrincipledMaterial { id: enclosure; baseColor: "#202328"; roughness: .64; metalness: .03; roughnessMap: powder; normalMap: grain; normalStrength: .14 }
+    PrincipledMaterial { id: topFinish; baseColor: "#25292d"; roughness: .49; roughnessMap: powder; normalMap: grain; normalStrength: .17 }
     PrincipledMaterial { id: rubber; baseColor: "#121519"; roughness: .92; roughnessMap: molded }
     PrincipledMaterial { id: armFinish; baseColor: "#33393e"; metalness: .85; roughness: .3; roughnessMap: brushed; normalMap: fineMetal; normalStrength: .18 }
     PrincipledMaterial { id: steel; baseColor: "#bac3ca"; metalness: 1; roughness: .23; roughnessMap: brushed; normalMap: fineMetal; normalStrength: .16 }
     PrincipledMaterial { id: accentMetal; baseColor: Qt.tint("#be965c",Qt.alpha(app.accent,.5)); metalness: .88; roughness: .3; roughnessMap: brushed; normalMap: fineMetal; normalStrength: .22 }
-    PrincipledMaterial { id: discFinish; baseColor: "#11151a"; metalness: 0; roughness: .3; roughnessMap: lacquer; normalMap: microGrooves; normalStrength: .24; clearcoatAmount: .3; clearcoatRoughnessAmount: .26 }
+    PrincipledMaterial { id: discFinish; baseColor: "#101317"; metalness: 0; roughness: .23; roughnessMap: lacquer; normalMap: microGrooves; normalStrength: .18; clearcoatAmount: .4; clearcoatRoughnessAmount: .2 }
     PrincipledMaterial { id: runoutFinish; baseColor: "#13171b"; roughness: .28; clearcoatAmount: .2 }
     PrincipledMaterial { id: paper; baseColorMap: deck.artworkTexture; roughness: .92; roughnessMap: paperGrain }
-    PrincipledMaterial { id: glass; baseColor: Qt.tint("#afbfc4",Qt.alpha(app.accent,.09)); alphaMode: PrincipledMaterial.Blend; opacity: .08; roughness: .22; clearcoatAmount: .08; cullMode: Material.BackFaceCulling; depthDrawMode: Material.NeverDepthDraw }
+    PrincipledMaterial { id: glass; baseColor: Qt.tint("#afbfc4",Qt.alpha(app.accent,.09)); alphaMode: PrincipledMaterial.Blend; opacity: .065; roughness: .16; clearcoatAmount: .2; clearcoatRoughnessAmount: .18; cullMode: Material.BackFaceCulling; depthDrawMode: Material.NeverDepthDraw }
     PrincipledMaterial { id: glassEdge; baseColor: "#9eacb0"; alphaMode: PrincipledMaterial.Blend; opacity: .3; roughness: .18; depthDrawMode: Material.NeverDepthDraw }
     component Plate: Model {
         id: plate

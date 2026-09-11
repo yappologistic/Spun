@@ -7,12 +7,14 @@ DeckGeometry::DeckGeometry(QQuick3DObject *parent):QQuick3DGeometry(parent) {
     connect(this,&DeckGeometry::shapeChanged,this,&DeckGeometry::rebuild);rebuild();
 }
 void DeckGeometry::rebuild() {
+    if(m_initializing)return;
     struct Vertex {float x,y,z,nx,ny,nz,u,v;};
     QByteArray vertices;
     const float w=qMax(.01f,m_dimensions.x()/2),h=qMax(.01f,m_dimensions.y()/2),d=qMax(.01f,m_dimensions.z()/2);
     const float r=qBound(.001f,m_radius,qMin(w,h));
     const float bevel=qMin(qMin(3.f,d/2),r*.75f);
     constexpr int perimeter=68;
+    vertices.reserve(perimeter*16*3*sizeof(Vertex));
     const auto outward=[](int i){
         const int corner=(i/17)%4;
         const float angle=(corner*90+(i%17)*90.f/16)*float(M_PI)/180;

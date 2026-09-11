@@ -11,7 +11,7 @@ Menu {
     property bool confirmDelete: false
     readonly property var radioService: pinService || library
     readonly property bool radioCandidate: !batch && (currentSong || (!!selection.type && selection.type.endsWith("songs")))
-    onOpened: { confirmDelete = false; if (radioCandidate) radioService.prepareRadio(selection, currentSong) }
+    onOpened: { app.focusFirstMenuItem(menu); confirmDelete = false; if (radioCandidate) radioService.prepareRadio(selection, currentSong) }
     readonly property bool session: selection.type === "saved-queues"
     readonly property bool artist: selection.type === "artists"
     readonly property bool station: selection.type === "stations"

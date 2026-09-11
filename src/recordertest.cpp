@@ -1,3 +1,4 @@
+#include "testcapture.h"
 #include "recordertest.h"
 #include "player.h"
 #include "cider.h"
@@ -62,7 +63,7 @@ int exerciseRecorder(Player &player,QQuickWindow *window,const QString &temp,con
     };
     const auto click=[&](const char *name){auto *key=item(name);if(!check(key&&key->isEnabled(),qPrintable(QString(name)+" is enabled")))return;QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,point(key,QPointF(key->width()/2,key->height()/2)));QTest::qWait(70);};
     const auto move=[&](QPoint p,Qt::KeyboardModifiers modifier=Qt::NoModifier){QMouseEvent e(QEvent::MouseMove,p,window->mapToGlobal(p),Qt::NoButton,Qt::LeftButton,modifier);QGuiApplication::sendEvent(window,&e);QTest::qWait(15);};
-    const auto capture=[&](QString name){if(captures.isEmpty())return;QTest::mouseMove(window,QPoint(8,8));QTest::qWait(180);const QImage image=window->grabWindow();check(!image.isNull(),"frame renders");if(!image.isNull()){QDir().mkpath(captures);check(image.save(captures+"/"+name+".png"),"capture saved");}};
+    const auto capture=[&](QString name){if(captures.isEmpty())return;QTest::mouseMove(window,QPoint(8,8));QTest::qWait(180);const QImage image=captureTestWindow(window);check(!image.isNull(),"frame renders");if(!image.isNull()){QDir().mkpath(captures);check(image.save(captures+"/"+name+".png"),"capture saved");}};
     player.setVolume(0);player.setMotion(false);player.setThreeD(false);player.setMiniMode(false);player.setShowPlayerBody(false);player.clear();
     QList<QUrl> files;for(int i=0;i<3;++i){const QString path=temp+QString("/recorder-%1.flac").arg(i);QFile::copy(QStringLiteral(SPUN_SOURCE_DIR "/assets/First-Light.flac"),path);files.append(QUrl::fromLocalFile(path));}
     player.addUrls(files,false);if(!check(until([&]{return !player.busy()&&player.count()==3;}),"local fixtures import"))return 2;
@@ -167,7 +168,7 @@ int exerciseRecorder(Player &player,QQuickWindow *window,const QString &temp,con
             auto *key=item(entry.first);QPoint at;
             if(threeD){auto *view=item("player3DView");view->setProperty("recorderYaw",entry.second>=8?-75.:0.);QTest::qWait(80);QVariant p;QMetaObject::invokeMethod(view,"projectRecorderControl",Q_RETURN_ARG(QVariant,p),Q_ARG(QVariant,entry.second));at=view->mapToScene(p.toPointF()).toPoint();}
             else at=point(key,QPointF(key->width()/2,key->height()/2));
-            const QImage resting=window->grabWindow();QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,at);
+            const QImage resting=captureTestWindow(window);QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,at);
             check(key->property("held").toBool()&&key->property("armed").toBool(),"press reaches the physical button face");
             // Software 3D frames can be much slower than the animation clock.
             // Wait for the rendered state instead of treating CPU render time as input latency.
@@ -175,7 +176,7 @@ int exerciseRecorder(Player &player,QQuickWindow *window,const QString &temp,con
             const double depth=key->property("pressDepth").toDouble();
             std::cout<<"PRESSURE "<<entry.first.toStdString()<<" depth "<<depth<<std::endl;
             check(depth>.65&&depth<1.15,qPrintable(entry.first+" develops bounded physical travel"));
-            const QImage pressed=window->grabWindow();check(!pressed.isNull()&&pressed!=resting,"button travel changes the rendered frame");
+            const QImage pressed=captureTestWindow(window);check(!pressed.isNull()&&pressed!=resting,"button travel changes the rendered frame");
             if(entry.second==1&&!captures.isEmpty())pressed.save(captures+(threeD?"/tp7-3d-pressed.png":"/tp7-2d-pressed.png"));
             move(QPoint(8,8));QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,QPoint(8,8));
             check(until([&]{return std::abs(key->property("pressDepth").toDouble())<.01;}),"released button settles back into its housing");

@@ -20,6 +20,9 @@ struct Track {
 struct LoadedArtwork { QImage image; QString file; bool created = false; };
 struct ImportedTracks { QList<Track> tracks; QString firstPath; };
 
+class Tx6;
+class QAudioBufferOutput;
+
 class Player : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString trackKey READ trackKey NOTIFY trackChanged)
@@ -126,6 +129,8 @@ public:
     QString artworkFile() const { return m_artFile; }
     QString trackId() const;
     void setVolume(double value);
+    void attachMixer(Tx6 *mixer);
+    void refreshMixerRoute();
     void setShuffle(bool value);
     void setRepeatMode(int value);
     void setLight(bool value);
@@ -184,8 +189,10 @@ private:
     QFutureWatcher<void> m_audioPreparation;
     bool m_preparingAudio = false, m_playPending = false;
     double m_volume = .65;
+    Tx6 *m_mixer=nullptr;
     std::unique_ptr<QAudioOutput> m_audio;
     std::unique_ptr<QMediaPlayer> m_media;
+    std::unique_ptr<QAudioBufferOutput> m_mixOutput;
     QSettings m_settings;
     QImage m_art;
     QFutureWatcher<LoadedArtwork> m_artLoader;

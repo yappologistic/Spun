@@ -385,7 +385,7 @@ Rectangle {
             }
             onClicked: discographyMenu.open()
             Menu {
-                id: discographyMenu; objectName: "discographyMenu"; y: parent.height + 4; width: 204; padding: 8; spacing: 2; popupType: Popup.Item
+                id: discographyMenu; onOpened: panel.app.focusFirstMenuItem(discographyMenu); objectName: "discographyMenu"; y: parent.height + 4; width: 204; padding: 8; spacing: 2; popupType: Popup.Item
                 background: Rectangle { radius: SpunStyle.popupRadius; color: SpunStyle.popup }
                 enter: SpunPopupEnter {}
                 exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: SpunStyle.exit; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }

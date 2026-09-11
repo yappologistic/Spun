@@ -1,3 +1,4 @@
+#include "testcapture.h"
 #include "artworktest.h"
 #include "player.h"
 #include "cider.h"
@@ -67,7 +68,10 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
     const auto colorIs=[](const QImage &image,QColor c){return !image.isNull()&&image.pixelColor(0,0)==c;};
     const auto publish=[&](const QString &id,const QString &file,const QString &album="Remote album") {remote.track(id,file.isEmpty()?QUrl():QUrl::fromLocalFile(file),album);};
     const auto inspect=[&](QColor color,bool threeD) {
-        if(!wait([&]{return colorIs(presenter->artwork(),color);}))return false;
+        // Presentation and its QML texture bindings can settle on separate
+        // event-loop turns. Keep the same deadline and inspect the whole path.
+        return wait([&] {
+        if(!colorIs(presenter->artwork(),color))return false;
         if(!threeD&&player.medium()=="tp7"){auto *face=window->findChild<RecorderSurface*>("recorderWheelSurface");return face&&colorIs(face->property("artwork").value<QImage>(),color);}
         if(!threeD){auto *disc=window->findChild<Disc*>("discFace");return disc&&colorIs(disc->artwork(),color);}
 #ifdef SPUN_WITH_3D
@@ -85,6 +89,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
 #else
         return false;
 #endif
+        });
     };
     QList<bool> modes{false};if(qmlContext(window)->contextProperty("supports3D").toBool())modes.append(true);
     for(bool threeD:modes)for(const QString &medium:{QString("cd"),QString("vinyl"),QString("cassette"),QString("tp7")}) {
@@ -105,7 +110,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         publish("no-remote-cover",{});window->setProperty("useCider",true);QTest::qWait(50);
         check(presenter->artwork().isNull(),"source switch without artwork does not borrow Local's cover");
         publish("capture-blue",temp+"/art-blue.png");check(inspect(Qt::blue,threeD),"artwork recovers after an empty result");
-        if(!captures.isEmpty()){QDir().mkpath(captures);window->grabWindow().save(captures+"/"+medium+(threeD?"-3d":"-2d")+".png");}
+        if(!captures.isEmpty()){QDir().mkpath(captures);captureTestWindow(window).save(captures+"/"+medium+(threeD?"-3d":"-2d")+".png");}
     }
 #ifdef SPUN_WITH_3D
     // Inspect the rendered label as well as its CPU-side pixel buffer. A stale
@@ -118,7 +123,7 @@ int exerciseArtwork(Player &player,QQuickWindow *window,const QString &temp,cons
         QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,projected),
             Q_ARG(QVariant,tape?128.:player.medium()=="cd"?345.:player.medium()=="tp7"?276.:285.),Q_ARG(QVariant,tape?203.:player.medium()=="tp7"?249.:294.));
         const QPointF position=view->mapToScene(projected.toPointF());
-        const QImage frame=window->grabWindow();
+        const QImage frame=captureTestWindow(window);
         if(frame.isNull())return false;
         const double scale=frame.width()/double(window->width());
         const QPoint center=(position*scale).toPoint();

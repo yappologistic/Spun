@@ -1,3 +1,4 @@
+#include "testcapture.h"
 #include "turntabletest.h"
 #include "player.h"
 #include "cider.h"
@@ -83,7 +84,7 @@ int exerciseTurntable(Player &player,QQuickWindow *window,const QString &temp,co
     const auto projected=[&](QQuickItem *c,QPointF p){auto *surface=item("mediaSurface");const auto local=c->mapToItem(surface,p);QVariant r;QMetaObject::invokeMethod(view,"projectSurface",Q_RETURN_ARG(QVariant,r),Q_ARG(QVariant,local.x()),Q_ARG(QVariant,local.y()));return view->mapToScene(r.toPointF()).toPoint();};
     const auto move=[&](QPoint p,Qt::KeyboardModifiers m=Qt::NoModifier){QMouseEvent e(QEvent::MouseMove,p,window->mapToGlobal(p),Qt::NoButton,Qt::LeftButton,m);QGuiApplication::sendEvent(window,&e);QTest::qWait(20);};
     const auto clickHardware=[&](int index){QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,hardware(index));QTest::qWait(80);};
-    const auto capture=[&](const QString &name){if(captures.isEmpty())return;QTest::mouseMove(window,QPoint(5,5));QTest::qWait(150);QDir().mkpath(captures);check(window->grabWindow().save(captures+"/"+name+".png"),"turntable capture saved");};
+    const auto capture=[&](const QString &name){if(captures.isEmpty())return;QTest::mouseMove(window,QPoint(5,5));QTest::qWait(150);QDir().mkpath(captures);check(captureTestWindow(window).save(captures+"/"+name+".png"),"turntable capture saved");};
     capture("vinyl-front");
     if(qEnvironmentVariableIsSet("SPUN_TEST_VISUAL_ONLY")) {
         window->setColor(QColor("#25272c"));

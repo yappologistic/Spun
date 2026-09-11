@@ -9,10 +9,12 @@ Node {
     readonly property var controls: app.recorderView
     Texture { id: fineGrain; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "bead-normal" } scaleU: 2; scaleV: 2 }
     Texture { id: knurled; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "knurled-normal" } scaleU: 1.5; scaleV: 1 }
-    PrincipledMaterial { id: aluminum; baseColor: "#c3c8cb"; metalness: .85; roughness: .46 }
-    PrincipledMaterial { id: faceFinish; baseColor: "#c3c8cb"; metalness: .8; roughness: .52; normalMap: fineGrain; normalStrength: .16 }
-    PrincipledMaterial { id: wheelFinish; baseColor: "#b9bfc5"; metalness: .84; roughness: .52; normalMap: fineGrain; normalStrength: .1 }
-    PrincipledMaterial { id: polished; baseColor: "#d5dbe0"; metalness: 1; roughness: .27 }
+    Texture { id: satin; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "satin" } }
+    Texture { id: turned; generateMipmaps: true; mipFilter: Texture.Linear; textureData: SurfaceTexture { kind: "turned-normal" } }
+    PrincipledMaterial { id: aluminum; baseColor: "#ccd0d2"; metalness: .82; roughness: .38; roughnessMap: satin }
+    PrincipledMaterial { id: faceFinish; baseColor: "#cbd0d3"; metalness: .8; roughness: .43; roughnessMap: satin; normalMap: fineGrain; normalStrength: .13 }
+    PrincipledMaterial { id: wheelFinish; baseColor: "#c6cbce"; metalness: .88; roughness: .43; roughnessMap: satin; normalMap: turned; normalStrength: .055 }
+    PrincipledMaterial { id: polished; baseColor: "#d5dbe0"; metalness: 1; roughness: .23 }
     PrincipledMaterial { id: black; baseColor: "#22292e"; roughness: .62 }
     PrincipledMaterial { id: engraving; baseColor: "#657078"; metalness: .35; roughness: .65 }
     PrincipledMaterial { id: orange; baseColor: "#ed7e1f"; roughness: .63; normalMap: fineGrain; normalStrength: .55 }
@@ -148,7 +150,7 @@ Node {
         pickable: true; property int recorderControl: 7
         source: "#Cylinder"; position: recorder.surface(294.5,389.5,-9); scale: Qt.vector3d(.35,.29,.35)
         eulerRotation.y: recorder.app.deckPlayer.volume*270
-        materials: PrincipledMaterial { baseColor: "#c3cbd1"; metalness: 1; roughness: .34; normalMap: knurled; normalStrength: .65 }
+        materials: PrincipledMaterial { baseColor: "#c3cbd1"; metalness: .9; roughness: .39; normalMap: knurled; normalStrength: .3 }
     }
     Model { pickable: true; property int recorderControl: 7; source: "#Cylinder"; position: recorder.surface(294.5,372,-9); scale: Qt.vector3d(.31,.06,.31); materials: polished }
     Model { pickable: true; property int recorderControl: 7; source: "#Cylinder"; position: recorder.surface(294.5,376,-9); scale: Qt.vector3d(.35,.009,.35); materials: polished }

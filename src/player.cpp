@@ -1,4 +1,5 @@
 #include "player.h"
+#include "tx6.h"
 #include "artwork.h"
 #include <QDir>
 #include <QDirIterator>
@@ -92,6 +93,10 @@ Player::~Player() {
     m_importJob.waitForFinished();
     save();
     if (m_preparingAudio) m_audioPreparation.waitForFinished();
+    // QAudioBufferOutput detaches itself from its player during destruction.
+    // Keep that player alive until the tap is gone, including after bypass.
+    if(m_media){m_media->stop();m_media->setAudioBufferOutput(nullptr);}
+    m_mixOutput.reset();
     // No worker keeps a Player pointer. Finish its bounded cache write before exit.
     if (m_artJobActive) {
         m_artLoader.waitForFinished();
@@ -105,6 +110,7 @@ void Player::ensureMedia() {
     m_audio->setVolume(m_volume);
     m_media = std::make_unique<QMediaPlayer>();
     m_media->setAudioOutput(m_audio.get());
+    refreshMixerRoute();
     connect(m_media.get(), &QMediaPlayer::playbackStateChanged, this, &Player::playingChanged);
     connect(m_media.get(), &QMediaPlayer::positionChanged, this, &Player::positionChanged);
     connect(m_media.get(), &QMediaPlayer::durationChanged, this, &Player::durationChanged);
@@ -565,4 +571,16 @@ QString Player::albumKey() const {
     if(m_index<0)return {};
     const auto &t=m_tracks[m_index];
     return t.album.isEmpty() ? t.path : t.album+"|"+(t.albumArtist.isEmpty() ? QFileInfo(t.path).absolutePath() : t.albumArtist);
+}
+
+void Player::attachMixer(Tx6 *mixer) { m_mixer=mixer;refreshMixerRoute(); }
+void Player::refreshMixerRoute() {
+    if(!m_media)return;
+    const bool active=m_mixer&&m_mixer->active();
+    if(active&&!m_mixOutput){
+        m_mixOutput=std::make_unique<QAudioBufferOutput>(Tx6::format());
+        connect(m_mixOutput.get(),&QAudioBufferOutput::audioBufferReceived,this,[this](const QAudioBuffer &buffer){if(m_mixer)m_mixer->consume(buffer);});
+    }
+    m_media->setAudioBufferOutput(active?m_mixOutput.get():nullptr);
+    m_audio->setMuted(active);
 }

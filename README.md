@@ -1,6 +1,6 @@
 <h1 align="center">Spun</h1>
 
-<p align="center">A CD, vinyl and cassette music player for Linux.</p>
+<p align="center">A music player for Linux with CD, vinyl, cassette and recorder views.</p>
 
 <p align="center">
   <img src="assets/screenshots/spun-vinyl.png" alt="Spun in vinyl mode with a gold tonearm and the Cider queue alongside it" width="1000">
@@ -72,16 +72,27 @@ Spun connects to the local API on port 10767. Basic playback controls use Linux'
 
 Choose a medium in **More → Preferences**. All four share playback controls, album details, lyrics and Mini mode.
 
-- **CD:** album artwork on the disc, with gentle rotation or an optional **500 RPM** setting. This changes the visual speed only.
+- **CD:** a DM15 R2R-inspired aluminum player with a glass lid, live display, transport buttons, shuffle and repeat selectors, and a volume knob. Stop pauses and returns to the start; the lid latch pauses before opening. In 3D, drag the housing to rotate it and double-click to reset. Gentle rotation and the optional **500 RPM** setting affect the visual speed only.
 - **Vinyl:** a record with grooves and Relaxed, 33⅓ or 45 RPM rotation. Drag the needle to seek and play. The 3D turntable has a hinged dust cover, working speed buttons and a cue lever that lifts or lowers the needle to pause or play. Drag its housing to rotate it; double-click to reset the angle. Optional effects include crackle, hiss and groove skips.
-- **Cassette:** Clear, Smoke and Cream finishes, moving tape reels and optional transport sounds. Reels turn counterclockwise during forward playback and reverse while rewinding.
+- **Cassette:** Clear, Smoke and Cream tapes in a CP13-inspired portable player, with moving reels and optional transport sounds. The top buttons play or pause, seek backward or forward ten seconds, and stop playback. Press Stop again to open the door. Drag the side knob to adjust volume. In 3D, the clear panels reveal the transport, flywheel and belt; drag the housing to rotate it and double-click to reset. Reels turn counterclockwise during forward playback and reverse while rewinding.
 - **TP-7:** a metal recorder with a draggable wheel, track display and working transport, rocker and volume controls. In 3D, drag the body to rotate it horizontally or tilt it vertically; double-click to reset the angle. The lower keys are Previous, Play/Pause and Next. The rocker seeks ten seconds, and the knob controls volume. The side keys open album details, the queue and the player menu. This is a playback appearance, without microphone recording.
 - **Player bodies:** **Show player body** adds a turntable, portable cassette player or CD tray with a clear lid. Album changes exchange the medium with a brief sleeve or case animation. Tracks on the same album keep it in place, and playback starts immediately.
 - **3D:** enable **3D player** for modeled discs, reels, cases and tonearm parts, with metallic surfaces and lighting tinted by Noctalia's current palette. Playback controls stay in their familiar positions. Mini mode remains compact, and reverse-side details stay flat for reading.
 - **Seeking:** use the disc rim, vinyl needle or optional horizontal progress bar. Their previews stay in sync. Hold **Shift** for finer adjustments and **Esc** to cancel a drag.
 - **Albums as records:** enable **Play albums as records** in Vinyl preferences to give each album track a groove band. A needle drop selects the song and position. Local mode uses loaded album tracks in track-number order; Cider starts the album and verifies the track before seeking. Missing durations or unavailable tracks fall back to single-song seeking. The circular and horizontal bars share the album timeline, so either can select a track and position.
-- **Reverse view:** press **F** for album details and tracks. The disc and cassette also support double-clicking to flip. Press **Y** for lyrics when available. Local lyrics can come from matching `.lrc` or `.txt` files or embedded metadata. **View artwork** opens the full cover.
+- **Reverse view:** press **F** for album details and tracks. In 2D, the disc and cassette also support double-clicking to flip. Press **Y** for lyrics when available. Local lyrics can come from matching `.lrc` or `.txt` files or embedded metadata. **View artwork** opens the full cover.
 - **Mini mode:** a compact player with controls below the medium and an optional always-on-top setting. Hover or focus Next to preview the upcoming song when known.
+
+### TX-6 mixer
+
+In the TP-7 view, toggle **TX–6** beside the player. It works in 2D and 3D, with a modeled USB-C cable between the devices.
+
+- Channel 1 carries local TP-7 audio. Right-click channels 2–6 to load additional local files; all channels follow TP-7 playback and seeking.
+- The knob rows adjust high, mid and low EQ. Drag a fader or click its track to set the level. Press a channel key to mute; Shift-click to solo, or press the mixer's Shift button first.
+- The master knob controls player volume. FX I adds stereo delay; FX II enables compression. Hide or power off the mixer to bypass it.
+- The paired 3D view expands to make controls easier to reach. Buttons press inward and spring back on release.
+
+Mixing happens inside Spun. External USB hardware, recording, MIDI, synth mode and separate aux/cue outputs are not supported. With Cider, only master volume works because Cider plays its own audio. Additional tracks use private temporary audio caches, removed on unload or normal exit, with a 512 MiB limit per track (about 23 minutes).
 
 ### Browse through Cider
 
@@ -194,7 +205,7 @@ For focused player, artwork, lighting, geometry and media checks:
 ./scripts/test-3d.sh
 ```
 
-The default uses offscreen CPU rendering through Mesa and requires an available X display for its OpenGL context. It does not create visible windows. It checks recorder and turntable controls, physical rotation, seeking, rendered artwork and palette changes without exercising the full native window lifecycle.
+The default uses offscreen CPU rendering through Mesa and requires an available X display for its OpenGL context. It does not create visible windows. It checks CD, cassette, recorder, turntable and TX-6 controls, mixer audio processing, physical rotation, seeking, rendered artwork and palette changes without exercising the full native window lifecycle.
 
 For the complete 3D interaction and Cider-fixture suites, run `SPUN_TEST_RENDERER=native ./scripts/test-3d.sh` in a separate Wayland or X11 test session. This includes projected seeking, tonearm gestures, lid transitions, scaling and mode combinations. Set `SPUN_TEST_SCREEN` to the dedicated output name and `SPUN_TEST_OUTPUT` to a local capture directory. Missing 3D rendering fails the checks instead of silently skipping them.
 
@@ -203,6 +214,14 @@ For large imports, run `QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME= ./build/
 `--inspect-cider` and `--inspect-library` inspect a live Cider connection without changing playback. The opt-in `--verify-cider-writes` changes playback, queue and audio settings and leaves song radio playing after restoring its temporary edits. Use a privately paired test profile with `--config /path/to/test/settings.ini`; never share its connection file or captured library data.
 
 Run `python3 scripts/benchmark.py --output /tmp/spun-performance` for isolated performance comparisons. Offscreen results are not whole-desktop GPU measurements. `python3 scripts/make-demo.py` regenerates the original soundcheck after building and additionally requires FFmpeg.
+
+Use `python3 scripts/benchmark.py --three-d --media cd vinyl cassette tp7 tx6 --scenes idle playing --output /tmp/spun-3d-performance` to measure all five 3D assets. On supported Qt versions the report also includes draw calls, mesh and texture memory. Materials use small generated maps, a wallpaper-tinted studio probe and one 1024px shadow map; there are no downloaded texture packs. Render targets account for UI scaling and are capped at 1536px per side.
+
+`./build/spun --test-performance` measures mode-switch presentation latency and process memory with isolated, muted fixtures. Add `SPUN_PERF_PACING=1` in a native display session to measure animation updates and presented frames against that screen's refresh rate. `SPUN_PERF_MEDIA=cd,tx6` restricts the views, and `--capture-dir /tmp/spun-frames` saves the rendered results. Refresh-rate measurements require a visible, exposed window; offscreen frame counts do not measure display cadence.
+
+Motion uses Qt's frame clock and elapsed time. Hardware rendering on Wayland defaults to a threaded, vsync-driven render loop; `QSG_RENDER_LOOP` can override it. Actual frame rate depends on the scene and hardware. The CTest motion check verifies timing at simulated 60, 120, 165 and 240 Hz; it does not test physical displays at those rates.
+
+`SPUN_TEST_REVERSE_ONLY=1 ./build/spun --test-media-ui --capture-dir /tmp/spun-reverse` checks the rendered album reverse against both light and dark theme palettes, including text contrast and keyboard focus. It uses an isolated profile and does not change the desktop theme.
 
 </details>
 
