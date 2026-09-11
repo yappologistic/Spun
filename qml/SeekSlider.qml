@@ -40,7 +40,7 @@ SpunSlider {
         function movePointer(mouse) {
             if(!control.scrubbing)return
             const delta=(mouse.x-control.lastPointer)/(control.availableWidth-control.handle.width)
-            control.previewValue=Math.max(0,Math.min(1,control.previewValue+delta*((mouse.modifiers & Qt.ShiftModifier)?.1:1)))
+            control.previewValue=Math.max(0,Math.min(1,control.previewValue+delta*((mouse.modifiers & Qt.ShiftModifier)? 0.1:1)))
             control.lastPointer=mouse.x
             if(delta!==0){control.windDirection=Math.sign(delta);control.lastMove=Date.now()}
         }

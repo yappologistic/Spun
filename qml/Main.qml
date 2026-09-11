@@ -24,7 +24,7 @@ ApplicationWindow {
     minimumHeight: 150; maximumHeight: 1095
     onUiScaleChanged: Qt.callLater(updateMask)
     color: "transparent"
-    flags: Qt.Window | Qt.FramelessWindowHint | (miniPinned && !native.supportsBlur ? Qt.WindowStaysOnTopHint : 0)
+    flags: Qt.Window | Qt.FramelessWindowHint | (miniPinned && !platformNative.supportsBlur ? Qt.WindowStaysOnTopHint : 0)
     font.family: SpunStyle.family
     readonly property bool threeDGesture: !!activeSeekControl || scrubber.scrubbing || !!(armLoader.item && armLoader.item.dragging)
     readonly property bool threeDRequested: supports3D && player.threeD && !miniMode && !discFlipped
@@ -142,7 +142,7 @@ ApplicationWindow {
     function stopSwap() { discSwap.stop(); resetSwap(); presentation.releaseOutgoing() }
     function presentDisc() {
         const albumKey = deckPlayer.count ? (useCider ? "cider:" : "local:") + (deckPlayer.albumKey || deckPlayer.title) : ""
-        presentation.present(deckPlayer.artwork, albumKey, animate && !recorder && !discFlipped && visible && native.exposed)
+        presentation.present(deckPlayer.artwork, albumKey, animate && !recorder && !discFlipped && visible && platformNative.exposed)
     }
     function syncLibrary() { if (!visible || visibility === Window.Minimized) { songMenu.close(); musicBrowser.closeActions() }; library.active = libraryOpen && useCider && visible && visibility !== Window.Minimized }
     function syncLyrics() { lyrics.remote = useCider; lyrics.active = discFlipped && lyricsView && visible && visibility !== Window.Minimized }
@@ -227,12 +227,12 @@ ApplicationWindow {
     }
     function flipDisc() { if (deckPlayer.count > 0) discFlipped = !discFlipped }
     readonly property bool miniPinned: miniMode && player.miniOnTop
-    onMiniPinnedChanged: native.effects(root, backgroundBlur)
+    onMiniPinnedChanged: platformNative.effects(root, backgroundBlur)
     property bool miniMode: player.miniMode
     onMiniModeChanged: Qt.callLater(function() {
         cancelSeekPreview(); scrubber.cancelScrub(); stopSwap()
         if (miniMode) { artworkPopup.close(); savedQueuePicker.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); songMenu.close(); musicBrowser.closeActions(); libraryOpen = false; queueOpen = false; helpOpen = false; menu.close(); miniReveal.restart() }
-        updateMask(); native.effects(root, backgroundBlur)
+        updateMask(); platformNative.effects(root, backgroundBlur)
     })
     property bool editingText: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
     property bool queueSearchOpen: false
@@ -428,8 +428,8 @@ ApplicationWindow {
     property bool queueOpen: false
     property bool helpOpen: false
     readonly property bool menuOpen: !!(tx6Controls && tx6Controls.popupOpen) || artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
-    property bool backgroundBlur: player.backgroundBlur && native.supportsBlur
-    onBackgroundBlurChanged: { native.effects(root, backgroundBlur); Qt.callLater(updateMask) }
+    property bool backgroundBlur: player.backgroundBlur && platformNative.supportsBlur
+    onBackgroundBlurChanged: { platformNative.effects(root, backgroundBlur); Qt.callLater(updateMask) }
     property bool muted: false
     property real rememberedVolume: .65
     property var activeSeekControl: null
@@ -480,7 +480,7 @@ ApplicationWindow {
         function onHeightChanged() { if (target.height !== root.layoutHeight) target.height = root.layoutHeight }
     }
     function updateMask() {
-        native.shape(root, sideOpen)
+        platformNative.shape(root, sideOpen)
         // Popups share the logical scene; their overlay must use the same size.
         Overlay.overlay.transformOrigin = Item.TopLeft
         Overlay.overlay.scale = uiScale
@@ -502,7 +502,7 @@ ApplicationWindow {
     onHelpOpenChanged: { if (helpOpen && miniMode) player.miniMode = false; Qt.callLater(updateMask) }
     onMenuOpenChanged: Qt.callLater(updateMask)
     onWidthChanged: Qt.callLater(updateMask)
-    Component.onCompleted: { if (!testMode && player.ciderAutoStart) { useCider = true; root.ciderService.ensureRunning() }; updateMask(); native.place(root); Qt.callLater(presentDisc); syncLyrics() }
+    Component.onCompleted: { if (!testMode && player.ciderAutoStart) { useCider = true; root.ciderService.ensureRunning() }; updateMask(); platformNative.place(root); Qt.callLater(presentDisc); syncLyrics() }
     onClosing: player.save()
 
     Rectangle {
@@ -568,7 +568,7 @@ ApplicationWindow {
     // fixed 16 ms timer. Qt's render loop follows the active display's cadence.
     FrameAnimation {
         objectName: "mediaFrameAnimation"
-        running: root.animate && root.visible && root.visibility !== Window.Minimized && native.exposed && (root.deckPlayer.playing || root.spinSpeed > .02 || root.activeSeekControl || Math.abs(root.tapeWindSpeed) > .5)
+        running: root.animate && root.visible && root.visibility !== Window.Minimized && platformNative.exposed && (root.deckPlayer.playing || root.spinSpeed > .02 || root.activeSeekControl || Math.abs(root.tapeWindSpeed) > .5)
         onTriggered: root.advanceMediaFrame(frameTime, Date.now())
     }
     Connections {
@@ -588,7 +588,7 @@ ApplicationWindow {
         id: badge
         objectName: "sourceBar"
         visible: !root.miniMode
-        x: (root.playerWidth - width) / 2; y: 13; width: native.hyprland ? 256 : 344; height: 48; radius: 24
+        x: (root.playerWidth - width) / 2; y: 13; width: platformNative.hyprland ? 256 : 344; height: 48; radius: 24
         color: root.surface
         border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
@@ -656,8 +656,8 @@ ApplicationWindow {
             ink: root.queueOpen ? root.accent : root.ink; hoverFill: root.hoverFill
             onClicked: root.queueOpen = !root.queueOpen
         }
-        IconButton { visible: !native.hyprland; x: 256; y: 4; glyphName: "minus"; tip: "Minimize"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.showMinimized() }
-        IconButton { visible: !native.hyprland; x: 300; y: 4; glyphName: "close"; tip: "Close Spun"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: Qt.quit() }
+        IconButton { visible: !platformNative.hyprland; x: 256; y: 4; glyphName: "minus"; tip: "Minimize"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.showMinimized() }
+        IconButton { visible: !platformNative.hyprland; x: 300; y: 4; glyphName: "close"; tip: "Close Spun"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: Qt.quit() }
     }
 
     Item {
@@ -770,7 +770,7 @@ ApplicationWindow {
                             }
                         }
                     }
-                    Loader { id: recorderLoader; objectName: "recorderLoader"; anchors.fill: parent; transformOrigin: Item.TopLeft; scale: root.tx6Visible?.85:1; transform: Translate { x: root.tx6Visible?-65:0; y: root.tx6Visible?39:0 } active: root.recorder; sourceComponent: Recorder { app: root } }
+                    Loader { id: recorderLoader; objectName: "recorderLoader"; anchors.fill: parent; transformOrigin: Item.TopLeft; scale: root.tx6Visible? 0.85:1; transform: Translate { x: root.tx6Visible?-65:0; y: root.tx6Visible?39:0 } active: root.recorder; sourceComponent: Recorder { app: root } }
                     Loader { objectName: "cassetteReelsLoader"; anchors.fill: parent; active: root.cassette; sourceComponent: CassetteReels { app: root } }
                 }
                 back: Item {
@@ -1125,7 +1125,7 @@ ApplicationWindow {
                 // The presenter has already installed the new outgoing image.
                 // Stop the old sequence without releasing that new image.
                 discSwap.stop(); root.resetSwap()
-                if (!root.animate || root.recorder || root.discFlipped || !root.visible || !native.exposed) { presentation.releaseOutgoing(); return }
+                if (!root.animate || root.recorder || root.discFlipped || !root.visible || !platformNative.exposed) { presentation.releaseOutgoing(); return }
                 scrubber.cancelScrub(); root.outgoingAngle = root.spinAngle; root.outgoingCassetteLeftAngle = root.cassetteLeftAngle; root.outgoingCassetteRightAngle = root.cassetteRightAngle
                 root.swapOffset = 440; root.outgoingOffset = 0; root.outgoingOpacity = 1; root.incomingOpacity = 0
                 root.packageOpacity = root.bodyVisible ? 1 : 0
@@ -1190,7 +1190,7 @@ ApplicationWindow {
                 const pointer=previewFraction
                 let delta=pointer-lastFraction
                 if(delta>.5)delta-=1;else if(delta < -.5)delta+=1
-                previewFraction=Math.max(0,Math.min(1,previous+delta*(fine?.1:1)))
+                previewFraction=Math.max(0,Math.min(1,previous+delta*(fine? 0.1:1)))
                 lastFraction=pointer
             }
             function cancelScrub() { scrubbing = false }
@@ -2272,7 +2272,7 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        PreferenceSwitch { objectName: "blurToggle"; app: root; width: parent.width; visible: native.supportsBlur; height: visible ? implicitHeight : 0; text: "Blur background"; glyphName: "blur"; checked: player.backgroundBlur; onToggled: player.backgroundBlur = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
+                        PreferenceSwitch { objectName: "blurToggle"; app: root; width: parent.width; visible: platformNative.supportsBlur; height: visible ? implicitHeight : 0; text: "Blur background"; glyphName: "blur"; checked: player.backgroundBlur; onToggled: player.backgroundBlur = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                         PreferenceSwitch { objectName: "cassetteSoundsToggle"; app: root; width: parent.width; visible: root.cassette; height: visible ? implicitHeight : 0; text: "Cassette sounds"; glyphName: "volume"; checked: player.cassetteSounds; onToggled: player.cassetteSounds = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                         PreferenceSwitch { objectName: "motionToggle"; app: root; width: parent.width; text: "Animations"; glyphName: "motion"; checked: player.motion; onToggled: player.motion = checked; onActiveFocusChanged: if (activeFocus) preferenceScroll.reveal(this) }
                         Rectangle { x: 12; width: parent.width - 24; height: 1; color: root.hairline }
