@@ -18,7 +18,7 @@ Slider {
     Keys.onPressed: event => {
         if(event.key===Qt.Key_Home || event.key===Qt.Key_End) {
             const before=value
-            native.setSliderEndpoint(control,event.key===Qt.Key_End)
+            platformNative.setSliderEndpoint(control,event.key===Qt.Key_End)
             if(value!==before)moved()
             event.accepted=true
         } else event.accepted=false

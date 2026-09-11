@@ -171,7 +171,7 @@ Item {
                 if(!wheel.scrubbing)return
                 const next=wheel.fraction(mouse.x,mouse.y);let delta=next-wheel.lastFraction
                 if(delta>.5)delta-=1;else if(delta<-.5)delta+=1
-                wheel.lastFraction=next;wheel.previewValue=Math.max(0,Math.min(1,wheel.previewValue+delta*((mouse.modifiers&Qt.ShiftModifier)?.1:1)))
+                wheel.lastFraction=next;wheel.previewValue=Math.max(0,Math.min(1,wheel.previewValue+delta*((mouse.modifiers&Qt.ShiftModifier)? 0.1:1)))
             }
             function endPointer() { const valid=wheel.scrubbing&&wheel.enabled&&wheel.track===recorder.app.cassetteTrackIdentity;const fraction=wheel.previewValue;wheel.cancelSeek();if(valid)recorder.app.deckPlayer.seek(fraction*recorder.app.deckPlayer.duration) }
             function cancelPointer() { wheel.cancelSeek() }
