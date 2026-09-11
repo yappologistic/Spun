@@ -32,7 +32,7 @@ Play local music or control Apple Music through Cider. Spun puts your album artw
 <summary><b>Build dependencies for Arch and CachyOS</b></summary>
 
 ```bash
-sudo pacman -S --needed base-devel git cmake ninja python qt6-base qt6-declarative qt6-multimedia qt6-svg taglib qt6-quick3d
+sudo pacman -S --needed base-devel git cmake ninja python qt6-base qt6-declarative qt6-multimedia qt6-svg qt6-wayland taglib qt6-quick3d
 ```
 </details>
 
@@ -40,7 +40,7 @@ sudo pacman -S --needed base-devel git cmake ninja python qt6-base qt6-declarati
 <summary><b>Build dependencies for Fedora</b></summary>
 
 ```bash
-sudo dnf install @development-tools git cmake ninja-build python3 qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel qt6-qtsvg-devel taglib-devel qt6-qtquick3d-devel
+sudo dnf install gcc-c++ git cmake ninja-build pkgconf-pkg-config python3 qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel qt6-qtsvg-devel qt6-qtwayland taglib-devel qt6-qtquick3d-devel
 ```
 </details>
 
@@ -52,7 +52,7 @@ cd Spun
 ./scripts/install-launcher.sh
 ```
 
-**For 3D players**, Spun includes 3D when that dependency is available. To build without it, add `-DSPUN_ENABLE_3D=OFF` to the build command.
+Spun includes 3D when Qt Quick 3D is available. To build without it, add `-DSPUN_ENABLE_3D=OFF` to the build command.
 
 Open **Spun** from your application menu, or run `./scripts/run.sh` from its folder. The launcher points to that folder. If you move it, run `./scripts/install-launcher.sh` again.
 
