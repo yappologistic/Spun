@@ -57,6 +57,25 @@ Spun includes 3D when Qt Quick 3D is available. To build without it, add `-DSPUN
 Open **Spun** from your application menu, or run `./scripts/run.sh` from its folder. The launcher points to that folder. If you move it, run `./scripts/install-launcher.sh` again.
 
 <details>
+<summary>Ubuntu 22.04 and 24.04</summary>
+
+The default repositories do not provide the required Qt 6.8+ and TagLib 2.0+. Install a newer Qt SDK with Quick Controls, Multimedia, SVG, and optionally Quick 3D, and build TagLib 2.x using its [upstream instructions](https://github.com/taglib/taglib/blob/master/INSTALL.md).
+
+```bash
+sudo apt install build-essential git cmake ninja-build pkg-config python3 libutfcpp-dev zlib1g-dev libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
+```
+
+`libutfcpp-dev` supplies TagLib's UTF-8 dependency. `libxcb-cursor0` is required by Qt's X11 platform plugin. Point CMake at the newer Qt installation rather than the distribution's older Qt:
+
+```bash
+./scripts/build.sh -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH=/path/to/Qt/gcc_64
+```
+
+If TagLib was installed into a custom prefix, add its `lib/pkgconfig` directory to `PKG_CONFIG_PATH` before building. `pkg-config --modversion taglib` must report 2.0 or newer.
+
+</details>
+
+<details>
 <summary>Building on another Linux distribution</summary>
 
 You need a C++20 compiler, CMake 3.22+, Ninja, pkg-config, Python 3, Qt 6.8+ with Quick Controls, Multimedia, SVG and development files, and TagLib 2.0+ development files. Qt Quick 3D is optional. Package names differ between distributions. Spun is developed on CachyOS with Hyprland and Noctalia; desktop integration can vary elsewhere.
@@ -209,6 +228,7 @@ You can then delete the Spun source folder. Your music stays where it was. Prefe
 ## Troubleshooting and privacy
 
 - **Cider plays, but search or the queue fails:** check that its local API is enabled and Spun's token has the required permissions. Playback and API connections are separate.
+- **Qt cannot load the `xcb` platform plugin on Ubuntu:** install `libxcb-cursor0`. If it still fails, run with `QT_DEBUG_PLUGINS=1` to identify other missing libraries.
 - **3D is unavailable:** install Qt Quick 3D and rebuild. Qt's software scenegraph backend does not support the 3D view; the regular player remains available.
 - **A font is missing:** install it, reopen Spun and select it again. An unavailable saved font falls back to the system font.
 - **An audio file will not play:** supported formats depend on the codecs available to Qt Multimedia on your distribution.
