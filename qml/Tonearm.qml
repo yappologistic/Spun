@@ -6,7 +6,7 @@ Item {
     objectName: "vinylTonearm"
     required property var app
     property alias pointerInput: needleHit
-    readonly property bool motion: app.animate && visible && app.visible && native.exposed
+    readonly property bool motion: app.animate && visible && app.visible && platformNative.exposed
     readonly property bool engaged: visible && app.deckPlayer.count > 0 && ((app.deckPlayer.playing && !app.swapRunning) || landing || app.seekPreviewActive)
     readonly property bool canSeek: visible && app.deckPlayer.duration > 0 && (!app.useCider || (app.ciderService.canSeek && !app.listeningService.busy))
     property bool dragging: false
@@ -219,7 +219,7 @@ Item {
             const pointer = Math.atan2(-dx, dy) * 180 / Math.PI
             let delta=pointer-arm.lastPointerAngle
             if(delta>180)delta-=360;else if(delta < -180)delta+=360
-            arm.rawAngle += delta*((mouse.modifiers & Qt.ShiftModifier)?.1:1)
+            arm.rawAngle += delta * ((mouse.modifiers & Qt.ShiftModifier) ? 0.1 : 1)
             arm.lastPointerAngle=pointer
             arm.dragAngle = Math.max(-8, Math.min(38, arm.rawAngle))
         }

@@ -1637,7 +1637,7 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("player", &player);
     engine.rootContext()->setContextProperty("theme", &theme);
     engine.rootContext()->setContextProperty("typography", &typography);
-    engine.rootContext()->setContextProperty("native", &native);
+    engine.rootContext()->setContextProperty("platformNative", &native);
     engine.rootContext()->setContextProperty("lyrics", &lyrics);
     engine.rootContext()->setContextProperty("presentation", &presentation);
     engine.rootContext()->setContextProperty("tapeSound", &tapeSound);
