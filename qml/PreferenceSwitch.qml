@@ -9,6 +9,8 @@ Switch {
     padding: 0; spacing: 0
     font.family: SpunStyle.family; font.pixelSize: SpunStyle.body
     Accessible.name: text
+    Keys.onReturnPressed: event => { if(!event.isAutoRepeat) { toggle(); toggled() } }
+    Keys.onEnterPressed: event => { if(!event.isAutoRepeat) { toggle(); toggled() } }
     background: Rectangle {
         radius: SpunStyle.rowRadius
         color: "transparent"

@@ -1,6 +1,8 @@
 #include "mediauitest.h"
 #include "player.h"
 #include "disc.h"
+#include "theme.h"
+#include "testcapture.h"
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QQuickItem>
@@ -9,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
 #include <cmath>
@@ -49,6 +52,49 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         files.append(QUrl::fromLocalFile(path));
     }
     player.addUrls(files,false);check(wait([&]{return !player.busy();})&&player.count()==3,"album fixture imports three tracks");
+    // Check actual reverse pixels: valid theme properties alone missed a
+    // hardcoded silver backing behind light ink in the CD/cassette booklets.
+    {
+    auto *theme=qmlContext(window)->contextProperty("theme").value<Theme*>();
+    QFile palette(temp+"/config/gtk-4.0/noctalia.css");
+    if(!theme||!palette.open(QIODevice::ReadOnly))return 2;
+    const auto original=palette.readAll();palette.close();
+    const auto contrast=[](QColor a,QColor b) {
+        const auto luminance=[](QColor c) {
+            const auto linear=[](double v){return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);};
+            return .2126*linear(c.redF())+.7152*linear(c.greenF())+.0722*linear(c.blueF());
+        };
+        const double x=luminance(a),y=luminance(b);return (qMax(x,y)+.05)/(qMin(x,y)+.05);
+    };
+    for(bool light:{false,true}) {
+        auto css=original;
+        if(light){css.replace("#17191f","#f6f0e8");css.replace("#eee5dc","#342d29");css.replace("#24252b","#e9e0d5");css.replace("#e6b599","#8b492d");}
+        QSaveFile replacement(palette.fileName());if(!replacement.open(QIODevice::WriteOnly))return 2;
+        replacement.write(css);if(!replacement.commit())return 2;
+        check(wait([&]{return theme->colors()["card"].value<QColor>()==QColor(light?"#e9e0d5":"#24252b");}),"reverse follows live light/dark theme changes");
+        for(const QString medium:{"cd","vinyl","cassette","tp7"}) {
+            player.setMedium(medium);window->setProperty("discFlipped",false);QMetaObject::invokeMethod(window,"flipDisc");QTest::qWait(100);
+            auto *booklet=item("albumBooklet"),*title=item("discAlbumTitle");
+            const auto frame=captureTestWindow(window);
+            if(!booklet||!title||frame.isNull()){check(false,"reverse frame is available");continue;}
+            const double scale=frame.width()/double(window->width());
+            const auto point=booklet->mapToScene(QPointF(205,325))*scale;
+            const auto background=frame.pixelColor(point.toPoint());
+            check(background.alpha()==255,"reverse text surface is opaque");
+            check(contrast(title->property("color").value<QColor>(),background)>=4.5,"rendered reverse title has readable contrast");
+            check(contrast(window->property("mutedInk").value<QColor>(),background)>=4.5,"rendered reverse supporting text has readable contrast");
+            check(contrast(window->property("accent").value<QColor>(),background)>=4.5,"rendered reverse active track has readable contrast");
+            auto *list=item("albumTrackList");check(list&&list->hasActiveFocus(),"flip moves keyboard focus into album details");
+            if(!captures.isEmpty()){QDir().mkpath(captures);check(frame.save(captures+"/reverse-"+medium+(light?"-light":"-dark")+".png"),"reverse capture saved");}
+            QMetaObject::invokeMethod(window,"flipDisc");QTest::qWait(30);
+            check(!list->hasActiveFocus(),"closing album details releases its keyboard focus");
+        }
+    }
+    QSaveFile restore(palette.fileName());if(!restore.open(QIODevice::WriteOnly))return 2;
+    restore.write(original);if(!restore.commit())return 2;
+    check(wait([&]{return theme->colors()["card"].value<QColor>()==QColor("#24252b");}),"test theme restored");
+    if(qEnvironmentVariableIsSet("SPUN_TEST_REVERSE_ONLY"))return failures?1:0;
+    }
     player.setVinyl(true);player.setVinylAlbumMode(true);QTest::qWait(350);
     check(!window->property("recordKey").toString().isEmpty(),"album grooves expose a stable gesture identity");
     player.setHorizontalSeek(true);QTest::qWait(100);
@@ -59,8 +105,8 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,point);
         check(!previewArm->property("landing").toBool(),"new seek preview supersedes a pending needle landing");
         const double trackFraction=horizontal->property("previewValue").toDouble();
-        check(std::abs(window->property("recordVisualProgress").toDouble()-trackFraction/3)<.01,"horizontal preview maps the current song into the album timeline");
-        check(std::abs(previewArm->property("armAngle").toDouble()-(6+20*trackFraction/3))<.3,"paused album tonearm follows the horizontal preview immediately");
+        check(std::abs(window->property("recordVisualProgress").toDouble()-trackFraction)<.01,"horizontal preview matches the whole album timeline");
+        check(std::abs(previewArm->property("armAngle").toDouble()-(6+20*trackFraction))<.3,"paused album tonearm follows the horizontal preview immediately");
         QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,point);
         const auto ringStart=albumRim->mapToScene(QPointF(436,220)).toPoint(),ringEnd=albumRim->mapToScene(QPointF(220,436)).toPoint();
         QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,ringStart);

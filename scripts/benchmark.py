@@ -19,13 +19,16 @@ parser.add_argument('--runs', type=int, default=3)
 parser.add_argument('--startup-only', action='store_true', help='Exit after the first frame and report startup stages')
 parser.add_argument('--renderer', choices=('opengl', 'software'), default='opengl')
 parser.add_argument('--scale', type=float, default=1, help='Identical device scale for both builds')
-parser.add_argument('--media', nargs='+', choices=('cd', 'vinyl', 'cassette'), default=['cd'])
+parser.add_argument('--three-d', action='store_true', help='Measure the native 3D assets')
+parser.add_argument('--media', nargs='+', choices=('cd', 'vinyl', 'cassette', 'tp7', 'tx6'), default=['cd'])
 parser.add_argument('--scenes', nargs='+', choices=('idle', 'playing', 'mini', 'cycle'), default=['idle', 'playing', 'mini'])
 args = parser.parse_args()
 if args.runs < 1:
     parser.error('--runs must be positive')
 if args.scale <= 0:
     parser.error('--scale must be positive')
+if args.three_d and args.renderer == 'software':
+    parser.error('3D requires the OpenGL renderer; software OpenGL is supported via LIBGL_ALWAYS_SOFTWARE')
 args.output.mkdir(parents=True, exist_ok=True)
 versions = [('optimized', args.binary.resolve())]
 if args.baseline:
@@ -46,7 +49,10 @@ for trial in range(args.runs):
                 gpu_mib = None
                 gpu_sampled = False
                 with log_path.open('w') as log:
-                    process = subprocess.Popen([str(binary), '--benchmark', scene, '--benchmark-medium', medium], env=env, stdout=log, stderr=log)
+                    command = [str(binary), '--benchmark', scene, '--benchmark-medium', medium]
+                    if args.three_d:
+                        command.append('--benchmark-3d')
+                    process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
                     start, previous = time.monotonic(), None
                     try:
                         while process.poll() is None:
@@ -56,9 +62,8 @@ for trial in range(args.runs):
                             try:
                                 stat = Path(f'/proc/{process.pid}/stat').read_text().rsplit(')', 1)[1].split()
                                 ticks = int(stat[11]) + int(stat[12])
-                                # Same settled three-second window, excluding initialization and teardown.
-                                if previous and 4.5 <= now - start <= 7.5:
-                                    samples.append((ticks - previous[1]) / os.sysconf('SC_CLK_TCK') / (now - previous[0]) * 100)
+                                if previous:
+                                    samples.append((now-start, (ticks - previous[1]) / os.sysconf('SC_CLK_TCK') / (now - previous[0]) * 100))
                                 previous = now, ticks
                             except FileNotFoundError:
                                 pass
@@ -88,21 +93,28 @@ for trial in range(args.runs):
                 if measurement is None:
                     raise RuntimeError(f'{version} {scene}: window closed before measurement; see {log_path}')
                 row = json.loads(measurement)
+                if args.three_d and scene not in ('mini', 'startup') and not row.get('threeDActive'):
+                    raise RuntimeError(f'{version} {medium} {scene}: requested 3D scene was not active')
                 if args.startup_only:
-                    row.update(version=version, trial=trial, medium=medium, renderer=args.renderer, scale=args.scale,
+                    row.update(version=version, trial=trial, medium=medium, renderer=args.renderer, scale=args.scale, threeD=args.three_d,
                                binaryBytes=binary.stat().st_size)
                     results.append(row)
                     (args.output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
                     print(json.dumps(row), flush=True)
                     continue
                 memory = row.pop('memory')
+                # Align the three-second CPU window with the app's settled first frame.
+                # Older baseline binaries used a fixed two-second startup delay.
+                measurement_start = row.get('measurementStartMs', 2000) / 1000
+                samples = [cpu for timestamp, cpu in samples
+                           if measurement_start + 1.5 <= timestamp <= measurement_start + 4.5]
                 for key in ('Rss', 'Pss', 'Private_Dirty'):
                     row[key + 'KiB'] = int(next(line.split()[1] for line in memory.splitlines() if line.startswith(key + ':')))
                 row.update(version=version, trial=trial, maxCpu250ms=max(samples, default=0),
                            meanCpu250ms=sum(samples)/len(samples) if samples else 0,
                            validAnimation=scene in ('idle', 'cycle') or row['frames'] >= 300,
                            gpuMemoryMiB=gpu_mib,
-                           renderer=args.renderer, scale=args.scale,
+                           renderer=args.renderer, scale=args.scale, threeD=args.three_d,
                            binaryBytes=binary.stat().st_size)
                 results.append(row)
                 (args.output / 'results.json').write_text(json.dumps(results, indent=2) + '\n')
