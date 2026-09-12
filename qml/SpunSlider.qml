@@ -51,6 +51,11 @@ Slider {
         width: 4; height: (control.pressed || control.previewing) ? 20 : 16; radius: 2
         color: theme.colors.accent; opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
         Behavior on height { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
+        SpunStateLayer {
+            anchors.centerIn: parent; width: 24; height: 32; radius: 12
+            color: theme.colors.accent; hovered: control.hovered; pressed: control.pressed
+            enabled: control.enabled
+        }
         Rectangle {
             anchors.centerIn: parent; width: 16; height: 28; radius: 8
             color: "transparent"; border.width: control.visualFocus ? 2 : 0; border.color: theme.colors.accent

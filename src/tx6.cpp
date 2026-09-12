@@ -12,11 +12,7 @@ Tx6::Tx6(Player *player,const QString &settings,bool outputEnabled):QObject(play
     m_visible=m_settings.value("tx6Visible",false).toBool();
     m_channels[0].name="TP-7 · USB 1/2";
     for(int c=0;c<6;++c)for(int b=0;b<3;++b)coefficients(c,b);
-    player->attachMixer(this);
-    connect(player,&Player::mediumChanged,this,&Tx6::updateRoute);
-    connect(player,&Player::trackChanged,this,&Tx6::flush);
-    connect(player,&Player::seeked,this,&Tx6::flush);
-    connect(player,&Player::playingChanged,this,[this]{if(!m_player->playing())flush();});
+    m_player=nullptr; setPlayer(player);
     m_pump.setInterval(8);
     connect(&m_pump,&QTimer::timeout,this,[this]{
         if(!m_output || m_pending.isEmpty())return;
@@ -121,3 +117,14 @@ void Tx6::consume(const QAudioBuffer &buffer){
     m_pending.append(pcm);
 }
 void Tx6::flush(){m_pump.stop();m_output=nullptr;if(m_sink)m_sink->stop();m_sink.reset();m_pending.clear();m_echo.fill(0);m_echoCursor=0;m_envelope=0;m_outputPeak[0]=m_outputPeak[1]=0;m_master=m_player->volume();for(auto &c:m_channels){c.peak=0;for(auto &f:c.filters){std::fill_n(f.z1,2,0);std::fill_n(f.z2,2,0);}}emit metersChanged();}
+
+void Tx6::setPlayer(Player *player) {
+    if (!player || player==m_player) return;
+    if (m_player) { flush(); disconnect(m_player,nullptr,this,nullptr); m_player->attachMixer(nullptr); }
+    m_player=player;player->attachMixer(this);
+    connect(player,&Player::mediumChanged,this,&Tx6::updateRoute);
+    connect(player,&Player::trackChanged,this,&Tx6::flush);
+    connect(player,&Player::seeked,this,&Tx6::flush);
+    connect(player,&Player::playingChanged,this,[this]{if(!m_player->playing())flush();});
+    updateRoute();
+}

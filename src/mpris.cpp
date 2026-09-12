@@ -18,7 +18,8 @@ void RootAdaptor::Raise() {
     for (auto *window : QGuiApplication::topLevelWindows())
         if (window->title() == "Spun") { window->showNormal(); window->raise(); window->requestActivate(); }
 }
-PlayerAdaptor::PlayerAdaptor(Player *p, Cider *cider) : QDBusAbstractAdaptor(p), m_player(p), m_cider(cider) {
+PlayerAdaptor::PlayerAdaptor(Player *p, Cider *cider, Player *youtube, Player *jellyfin) : QDBusAbstractAdaptor(p), m_player(p), m_local(p), m_youtube(youtube), m_jellyfin(jellyfin), m_cider(cider) {
+    for (auto *p : {m_local,m_youtube,m_jellyfin}) { if (!p) continue;
     connect(p, &Player::trackChanged, this, &PlayerAdaptor::changed);
     connect(p, &Player::playingChanged, this, &PlayerAdaptor::changed);
     connect(p, &Player::durationChanged, this, &PlayerAdaptor::changed);
@@ -26,7 +27,8 @@ PlayerAdaptor::PlayerAdaptor(Player *p, Cider *cider) : QDBusAbstractAdaptor(p),
     connect(p, &Player::volumeChanged, this, &PlayerAdaptor::changed);
     connect(p, &Player::queueChanged, this, &PlayerAdaptor::changed);
     connect(p, &Player::artworkChanged, this, &PlayerAdaptor::changed);
-    connect(p, &Player::seeked, this, [this](qint64 value) { if (!m_remote) emit Seeked(value * 1000); });
+    connect(p, &Player::seeked, this, [this,p](qint64 value) { if (!m_remote && m_player==p) emit Seeked(value * 1000); });
+    }
     if (cider) {
         connect(cider, &Cider::trackChanged, this, &PlayerAdaptor::changed);
         connect(cider, &Cider::playingChanged, this, &PlayerAdaptor::changed);
@@ -52,9 +54,15 @@ void PlayerAdaptor::setLoop(const QString &value) {
 void PlayerAdaptor::setSourceWindow(QObject *window) {
     m_sourceWindow = window;
     QQmlProperty(window, "useCider").connectNotifySignal(this, SLOT(syncSource()));
+    QQmlProperty(window, "useYoutube").connectNotifySignal(this, SLOT(syncSource()));
+    if(window->metaObject()->indexOfProperty("useJellyfin")>=0)QQmlProperty(window, "useJellyfin").connectNotifySignal(this, SLOT(syncSource()));
     syncSource();
 }
-void PlayerAdaptor::syncSource() { setRemote(m_sourceWindow && m_sourceWindow->property("useCider").toBool()); }
+void PlayerAdaptor::syncSource() {
+    m_player = m_jellyfin && m_sourceWindow && m_sourceWindow->property("useJellyfin").toBool() ? m_jellyfin : m_youtube && m_sourceWindow && m_sourceWindow->property("useYoutube").toBool() ? m_youtube : m_local;
+    setRemote(m_sourceWindow && m_sourceWindow->property("useCider").toBool());
+    changed(); emit Seeked(position());
+}
 void PlayerAdaptor::setRemote(bool remote) {
     remote = remote && m_cider;
     if (remote == m_remote) return;
@@ -124,11 +132,11 @@ void PlayerAdaptor::changed() {
         QDBusConnection::sessionBus().send(message);
     });
 }
-PlayerAdaptor *registerMpris(Player *player, Cider *cider) {
+PlayerAdaptor *registerMpris(Player *player, Cider *cider, Player *youtube, Player *jellyfin) {
     auto bus = QDBusConnection::sessionBus();
     if (!bus.registerService("org.mpris.MediaPlayer2.spun")) return nullptr;
     new RootAdaptor(player);
-    auto *adaptor = new PlayerAdaptor(player, cider);
+    auto *adaptor = new PlayerAdaptor(player, cider, youtube, jellyfin);
     if (!bus.registerObject("/org/mpris/MediaPlayer2", player, QDBusConnection::ExportAdaptors)) {
         bus.unregisterService("org.mpris.MediaPlayer2.spun"); return nullptr;
     }

@@ -5,6 +5,11 @@
 #include <QtQuick3D/qquick3d.h>
 #endif
 #include "player.h"
+#include "youtube.h"
+#include "jellyfin.h"
+#ifdef SPUN_DIAGNOSTICS
+#include "jellyfintest.h"
+#endif
 #include "tx6.h"
 #include "tapesound.h"
 #include "vinylnoise.h"
@@ -13,6 +18,7 @@
 #include "musicactions.h"
 #ifdef SPUN_DIAGNOSTICS
 #include "librarytest.h"
+#include "youtubetest.h"
 #include "mediauitest.h"
 #include "artworktest.h"
 #include "threedtest.h"
@@ -213,7 +219,7 @@ public:
         // Error notices can overlap the otherwise click-through perimeter.
         region |= QRegion(73, 419, 384, 80);
         if (queue) {
-            const auto *panelName = window->property("libraryOpen").toBool() ? "libraryPanel" : "queuePanel";
+            const auto *panelName = window->property("libraryOpen").toBool() ? (window->property("useYoutube").toBool() ? "youtubePanel" : "libraryPanel") : "queuePanel";
             if (auto *panel = window->findChild<QQuickItem *>(panelName))
                 region |= itemRegion(panel);
         }
@@ -782,7 +788,7 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     check(sourceIndicator && waitFor([&] { return qAbs(sourceIndicator->x() - 56) < .25; }),
           "source selection spring settles after reversing direction");
     window->setProperty("useCider", true); QTest::qWait(20); player.setMotion(false); QTest::qWait(20);
-    check(sourceIndicator && qAbs(sourceIndicator->x() - 128) < .1,
+    check(sourceIndicator && ciderTab && qAbs(sourceIndicator->x() - ciderTab->mapToItem(sourceIndicator->parentItem(), QPointF()).x()) < .1,
           "reduced motion settles an in-flight selection spring immediately");
     window->setProperty("useCider", false); player.setMotion(true);
     auto *hoverButton = findItem(window->contentItem(), "menuButton");
@@ -1486,8 +1492,10 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
     player.addUrls({QUrl::fromLocalFile(nextAlbum)},false);waitFor([&]{return !player.busy();});
     write(temp+"/state/noctalia/settings.toml", "[shell.animation]\nenabled = true\n");
     waitFor([&]{return theme.motionScale()>0;});
-    player.select(1,false);waitFor([&]{return !player.artworkLoading();});QTest::qWait(80);
-    check(window->property("swapRunning").toBool(), "changing albums slides out the previous disc");
+    // Observe departure as it starts. Waiting for the incoming artwork and
+    // then sleeping can miss departure while the arrival phase still runs.
+    player.select(1,false);
+    check(waitFor([&]{return window->property("swapRunning").toBool();}), "changing albums slides out the previous disc");
     auto *outgoingDisc = window->findChild<QObject *>("outgoingDiscLoader");
     check(outgoingDisc && outgoingDisc->property("active").toBool()
           && outgoingDisc->property("item").value<QObject *>(), "outgoing disc remains rendered during its exit animation");
@@ -1554,7 +1562,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--test-performance" || option == "--self-test" || option == "--test-tx6" || option == "--test-cd-deck" || option == "--test-cassette-deck" || option == "--test-turntable" || option == "--test-recorder" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--test-jellyfin" || option == "--test-youtube-live" || option == "--test-youtube" || option == "--test-performance" || option == "--self-test" || option == "--test-tx6" || option == "--test-cd-deck" || option == "--test-cassette-deck" || option == "--test-turntable" || option == "--test-recorder" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1595,6 +1603,9 @@ int main(int argc, char **argv) {
     parser.addOption({"benchmark", "Measure an isolated startup, idle, playing, mini, or cycle scene", "scene"});
     parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"benchmark-3d", "Measure the native 3D asset rather than its 2D face"});
+    parser.addOption({"test-jellyfin", "Verify Jellyfin against a disposable server"});
+    parser.addOption({"test-youtube-live", "Verify anonymous live YouTube playback with isolated state"});
+    parser.addOption({"test-youtube", "Verify anonymous YouTube browsing, local library and playback"});
     parser.addOption({"test-library", "Run isolated music browser checks"});
     parser.addOption({"self-test", "Run isolated playback and UI checks"});
     parser.addOption({"test-artwork", "Verify artwork updates across playback sources and physical media"});
@@ -1615,14 +1626,16 @@ int main(int argc, char **argv) {
     parser.addOption({"inspect-library", "Verify Cider music browsing without changing playback"});
     parser.addOption({"inspect-cider", "Verify live Cider metadata and artwork without changing playback"});
     parser.addOption({"capture-dir", "Save test captures", "directory"});
+    parser.addOption({"youtube", "Open the anonymous YouTube Music browser"});
+    parser.addOption({"isolated", "Do not connect to Cider or register desktop media controls"});
     parser.addOption({"config", "Use a specific settings file", "path"});
     parser.addOption({"export-cover", "Write the original fallback artwork", "path"});
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("test-performance") || parser.isSet("test-tx6") || parser.isSet("test-cd-deck") || parser.isSet("test-cassette-deck") || parser.isSet("test-turntable") || parser.isSet("test-recorder") || parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("test-jellyfin") || parser.isSet("test-youtube-live") || parser.isSet("test-youtube") || parser.isSet("test-performance") || parser.isSet("test-tx6") || parser.isSet("test-cd-deck") || parser.isSet("test-cassette-deck") || parser.isSet("test-turntable") || parser.isSet("test-recorder") || parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
     if(test && qEnvironmentVariableIsSet("SPUN_TEST_SCREEN"))app.setDesktopFileName("spun-diagnostics");
-    if (!test && !parser.isSet("config")) {
+    if (!test && !parser.isSet("config") && !parser.isSet("isolated")) {
         auto bus = QDBusConnection::sessionBus();
         if (bus.interface() && bus.interface()->isServiceRegistered("org.mpris.MediaPlayer2.spun")) {
             QDBusInterface shell("org.mpris.MediaPlayer2.spun", "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2", bus);
@@ -1654,8 +1667,17 @@ int main(int argc, char **argv) {
     const qint64 fontReady = startup.elapsed();
     Theme theme(configRoot, stateRoot);
     Player player(settings);
+    Youtube youtube(QFileInfo(settings).absolutePath() + "/youtube");
+    Jellyfin jellyfin(QFileInfo(settings).absolutePath() + "/jellyfin", !test);
+    QObject::connect(&player, &Player::mediumChanged, &jellyfin, [&]{jellyfin.transport()->setMedium(player.medium());});
+    QObject::connect(&player, &Player::settingsChanged, &jellyfin, [&]{jellyfin.transport()->setVinylAlbumMode(player.vinylAlbumMode());});
+    jellyfin.transport()->setMedium(player.medium());
+    QObject::connect(&player,&Player::mediumChanged,&youtube,[&]{youtube.transport()->setMedium(player.medium());});
+    QObject::connect(&player,&Player::settingsChanged,&youtube,[&]{youtube.transport()->setVinylAlbumMode(player.vinylAlbumMode());});
+    youtube.transport()->setMedium(player.medium());
+    youtube.transport()->setVinylAlbumMode(player.vinylAlbumMode());
     Tx6 tx6(&player,settings,!test || qEnvironmentVariableIsSet("SPUN_TEST_MIXER_OUTPUT"));
-    Cider cider(!test, QFileInfo(settings).absolutePath() + "/cider-connection.json");
+    Cider cider(!test && !parser.isSet("isolated"), QFileInfo(settings).absolutePath() + "/cider-connection.json");
     Lyrics lyrics(&player, &cider);
     Library library(&cider);
     MusicActions musicActions(&cider);
@@ -1697,6 +1719,8 @@ int main(int argc, char **argv) {
 #endif
     engine.rootContext()->setContextProperty("player3DUrl", QUrl(QStringLiteral("qrc:/qml/Player3D.qml")));
     engine.rootContext()->setContextProperty("player", &player);
+    engine.rootContext()->setContextProperty("youtube", &youtube);
+    engine.rootContext()->setContextProperty("jellyfin", &jellyfin);
     engine.rootContext()->setContextProperty("tx6", &tx6);
     engine.rootContext()->setContextProperty("theme", &theme);
     engine.rootContext()->setContextProperty("typography", &typography);
@@ -1754,7 +1778,8 @@ int main(int argc, char **argv) {
         window->setScreen(screen);
         window->setPosition(screen->availableGeometry().topLeft()+QPoint(60,60));
     }
-    if (!test) { if (auto *mediaControls = registerMpris(&player, &cider)) mediaControls->setSourceWindow(window); }
+    if (parser.isSet("youtube")) { window->setProperty("useYoutube",true);window->setProperty("libraryOpen",true); }
+    if (!test && !parser.isSet("isolated")) { if (auto *mediaControls = registerMpris(&player, &cider, youtube.transport(), jellyfin.transport())) mediaControls->setSourceWindow(window); }
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &player, &Player::save);
     if (parser.isSet("benchmark")) {
         window->setProperty("benchmarkPinned", true);
@@ -2174,6 +2199,9 @@ int main(int argc, char **argv) {
     else if (parser.isSet("test-3d-lighting")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeDLighting(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeD(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-library")) QTimer::singleShot(650, &app, [&] { player.setThreeD(true); if(!waitFor([&]{return window->property("threeDActive").toBool();})) { std::cerr << "FAIL 3D scene must be active for Cider integration tests" << std::endl;app.exit(2);return; } app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
+    else if (parser.isSet("test-jellyfin")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseJellyfin(player,jellyfin,window,temp.path(),parser.value("capture-dir"))); });
+    else if (parser.isSet("test-youtube-live")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseYoutubeLive(player,youtube,window,parser.value("capture-dir"))); });
+    else if (parser.isSet("test-youtube")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseYoutube(player,youtube,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-media-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseMediaUi(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-library")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
     else if (test) QTimer::singleShot(650, &app, [&] {

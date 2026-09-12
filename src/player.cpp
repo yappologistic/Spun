@@ -23,8 +23,8 @@
 
 static QString text(const TagLib::String &s) { return QString::fromStdString(s.to8Bit(true)); }
 
-Player::Player(const QString &settingsPath, QObject *parent)
-    : QObject(parent), m_settings(settingsPath, QSettings::IniFormat) {
+Player::Player(const QString &settingsPath, QObject *parent, bool external)
+    : QObject(parent), m_external(external), m_settings(settingsPath, QSettings::IniFormat) {
     connect(this, &Player::queueChanged, this, [this] { m_tracksDirty = true; });
     connect(this, &Player::trackChanged, this, &Player::discDetailsChanged);
     connect(this, &Player::queueChanged, this, &Player::discDetailsChanged);
@@ -60,6 +60,7 @@ Player::Player(const QString &settingsPath, QObject *parent)
     m_miniOnTop = m_settings.value("miniOnTop", false).toBool();
     m_miniMode = m_settings.value("miniMode", false).toBool();
     m_backgroundBlur = m_settings.value("backgroundBlur", false).toBool();
+    if (m_external) return;
     const int size = m_settings.beginReadArray("tracks");
     for (int i = 0; i < size; ++i) {
         m_settings.setArrayIndex(i);
@@ -128,20 +129,20 @@ void Player::ensureMedia() {
         }
         if (status == QMediaPlayer::EndOfMedia) next(true);
     });
-    m_media->setSource(currentUrl());
+    m_media->setSource(mediaUrl());
 }
-QString Player::title() const { return m_index >= 0 ? m_tracks[m_index].title : "Add music"; }
+QString Player::title() const { return m_index >= 0 ? m_tracks[m_index].title : m_external ? (m_externalName == "YouTube Music" ? "Search YouTube Music" : "Browse " + m_externalName) : "Add music"; }
 QString Player::artist() const { return m_index >= 0 ? (m_tracks[m_index].artist.isEmpty() ? "Unknown artist" : m_tracks[m_index].artist) : QString(); }
 QString Player::album() const { return m_index >= 0 ? m_tracks[m_index].album : QString(); }
-QString Player::format() const { return m_index >= 0 ? QFileInfo(m_tracks[m_index].path).suffix().toUpper() : "LOCAL MUSIC PLAYER"; }
-QUrl Player::currentUrl() const { return m_index >= 0 ? QUrl::fromLocalFile(m_tracks[m_index].path) : QUrl(); }
+QString Player::format() const { if (m_external) return m_externalName.toUpper(); return m_index >= 0 ? QFileInfo(m_tracks[m_index].path).suffix().toUpper() : "LOCAL MUSIC PLAYER"; }
+QUrl Player::currentUrl() const { return m_index >= 0 ? (m_external ? QUrl(m_tracks[m_index].path) : QUrl::fromLocalFile(m_tracks[m_index].path)) : QUrl(); }
 QString Player::trackId() const {
     return m_index < 0 ? "/org/mpris/MediaPlayer2/TrackList/NoTrack" : "/org/spun/track/t" +
         QString::fromLatin1(QCryptographicHash::hash(currentUrl().toEncoded(), QCryptographicHash::Sha256).toHex().left(24));
 }
 QVariantList Player::queue() const {
     QVariantList result;
-    for (const auto &t : m_tracks) result.append(QVariantMap{{"path", t.path}, {"title", t.title}, {"artist", t.artist.isEmpty() ? "Unknown artist" : t.artist}, {"duration", t.duration}, {"artwork", queueArtworkUrl(t.path, t.cover)}});
+    for (const auto &t : m_tracks) result.append(QVariantMap{{"path", t.path}, {"title", t.title}, {"artist", t.artist.isEmpty() ? "Unknown artist" : t.artist}, {"duration", t.duration}, {"artwork", (m_external ? t.cover : queueArtworkUrl(t.path, t.cover))}});
     return result;
 }
 bool Player::supported(const QString &path) {
@@ -274,12 +275,13 @@ void Player::addUrls(const QList<QUrl> &urls, bool autoplay) {
 }
 void Player::select(int index, bool autoplay) {
     if (index < 0 || index >= count()) return;
+    if (m_external) { pause(); m_externalSource = QUrl(); emit externalCancelled(); }
     if (m_playPending) pause();
     m_restorePosition = -1;
     dismissError();
     m_index = index;
     m_shuffleVisited.insert(m_tracks[index].path);
-    if (m_media) m_media->setSource(currentUrl());
+    if (m_media) m_media->setSource(mediaUrl());
     loadArt();
     emit trackChanged(); emit durationChanged(); emit positionChanged();
     if (autoplay) play();
@@ -294,7 +296,7 @@ void Player::loadArt() {
         m_artFile.clear();
     }
     emit artworkChanged();
-    if (!m_artJobActive && m_artLoading) startArtLoad();
+    if (!m_external && !m_artJobActive && m_artLoading) startArtLoad();
 }
 void Player::startArtLoad() {
     m_artJobActive = true;
@@ -337,6 +339,10 @@ void Player::toggle() { playing() ? pause() : play(); }
 void Player::play() {
     if (m_index < 0) return;
     dismissError();
+    if (m_external && m_externalSource.isEmpty()) {
+        if (!m_externalWantPlay) { m_externalWantPlay = true; emit playingChanged(); emit externalRequested(trackKey()); }
+        return;
+    }
     if (m_media) { m_media->play(); return; }
     if (!m_playPending) { m_playPending = true; emit playingChanged(); }
     if (m_preparingAudio) return;
@@ -347,11 +353,14 @@ void Player::play() {
     m_audioPreparation.setFuture(QtConcurrent::run([] { (void)QMediaDevices::defaultAudioOutput(); }));
 }
 void Player::pause() {
+    const bool externalPending = std::exchange(m_externalWantPlay, false);
+    if (externalPending) { emit externalCancelled(); emit playingChanged(); }
     const bool pending = std::exchange(m_playPending, false);
     if (m_media) m_media->pause();
     if (pending) emit playingChanged();
 }
 void Player::stop() {
+    if (m_external) pause();
     const bool pending = std::exchange(m_playPending, false);
     m_restorePosition = -1;
     if (m_media) m_media->stop();
@@ -414,7 +423,7 @@ void Player::previous(bool autoplay) {
 }
 void Player::seek(qint64 milliseconds) {
     const auto pos = qBound<qint64>(0, milliseconds, duration());
-    if (!m_media || m_media->mediaStatus() == QMediaPlayer::LoadingMedia) {
+    if (!m_media || (m_external && m_externalSource.isEmpty()) || m_media->mediaStatus() == QMediaPlayer::LoadingMedia) {
         m_restorePosition = pos;
         emit positionChanged();
         if (!m_media) emit seeked(pos);
@@ -518,6 +527,7 @@ void Player::save() {
     m_settings.setValue("miniMode", m_miniMode);
     m_settings.setValue("miniOnTop", m_miniOnTop);
     m_settings.setValue("ciderAutoStart", m_ciderAutoStart);
+    if (m_external) { m_settings.sync(); return; }
     m_settings.setValue("currentPath", currentUrl().toLocalFile());
     m_settings.setValue("position", position());
     if (m_tracksDirty) {
@@ -547,7 +557,7 @@ QVariantMap Player::discDetails() const {
         if (i==m_index) { indices.append(i); continue; }
         if (current.album.isEmpty() || t.album!=current.album) continue;
         const bool sameArtist=(!current.albumArtist.isEmpty() ? current.albumArtist==t.albumArtist : current.artist==t.artist);
-        if (sameArtist || QFileInfo(t.path).absolutePath()==currentFolder) indices.append(i);
+        if (sameArtist || (!m_external && QFileInfo(t.path).absolutePath()==currentFolder)) indices.append(i);
     }
     std::stable_sort(indices.begin(), indices.end(), [&](int a,int b) {
         const auto &left=m_tracks[a], &right=m_tracks[b];
@@ -583,4 +593,45 @@ void Player::refreshMixerRoute() {
     }
     m_media->setAudioBufferOutput(active?m_mixOutput.get():nullptr);
     m_audio->setMuted(active);
+}
+
+// External catalogs keep stable public identities separate from expiring media URLs.
+// A separate Player instance shares transport behavior without altering the local queue.
+void Player::setExternalTracks(const QList<Track> &tracks, int index, bool autoplay) {
+    if (!m_external) return;
+    clear(); m_tracks = tracks; emit queueChanged();
+    if (!m_tracks.isEmpty()) select(qBound(0, index, count()-1), autoplay);
+}
+void Player::appendExternalTracks(const QList<Track> &tracks) {
+    if (!m_external || tracks.isEmpty()) return;
+    const bool empty = m_tracks.isEmpty(); m_tracks.append(tracks); emit queueChanged();
+    if (empty) select(0, false);
+}
+void Player::resolveExternal(const QString &key, const QUrl &source) {
+    if (!m_external || key != trackKey() || !source.isLocalFile() || !QFileInfo::exists(source.toLocalFile())) return;
+    const bool autoplay = std::exchange(m_externalWantPlay, false);
+    const auto pendingPosition = m_restorePosition;
+    m_externalSource = source;
+    ensureMedia();
+    if (m_media->source() != source) m_media->setSource(source);
+    m_restorePosition = pendingPosition;
+    if (autoplay) m_media->play();
+    emit playingChanged();
+}
+void Player::setExternalArtwork(const QString &key, const QImage &image) {
+    if (!m_external || key != trackKey()) return;
+    m_art = image.scaled(1200,1200,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+    m_artLoading = false;
+    if (!m_artFile.isEmpty()) QFile::remove(m_artFile);
+    m_artFile.clear();
+    if (!m_art.isNull()) {
+        m_artFile = QFileInfo(m_settings.fileName()).absolutePath()+"/youtube-current-art.png";
+        QSaveFile file(m_artFile);
+        if (!file.open(QIODevice::WriteOnly) || !m_art.save(&file,"PNG") || !file.commit()) m_artFile.clear();
+    }
+    emit artworkChanged();
+}
+void Player::failExternal(const QString &key, const QString &message) {
+    if (!m_external || key != trackKey()) return;
+    pause(); fail(message);
 }

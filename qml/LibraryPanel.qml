@@ -136,33 +136,8 @@ Rectangle {
         function onItemsChanged() { const keys = new Set(panel.browser.items.map((item, index) => panel.rowKey(index, item))); panel.selectionKeys = panel.selectionKeys.filter(key => keys.has(key)); Qt.callLater(function() { list.contentY = panel.pageY; list.currentIndex = panel.pageIndex; if (!panel.appending && panel.visible && list.count) { if (panel.app.animate) { listEntrance.startOffset = panel.navigationDirection * 12; listEntrance.restart() }; panel.navigationDirection = 0 } }) }
         function onReturned() { const positions = panel.savedPositions.slice(); const previous = positions.pop() || { y: 0, index: -1 }; panel.savedPositions = positions; panel.navigationDirection = -1; Qt.callLater(function() { list.currentIndex = Math.min(list.count - 1, previous.index); list.contentY = previous.y; list.forceActiveFocus(Qt.BacktabFocusReason) }) }
     }
-    component SmallButton: AbstractButton {
-        id: control
-        property bool selected: false
-        property bool pill: true
-        implicitHeight: 36
-        focusPolicy: Qt.StrongFocus
-        hoverEnabled: true
-        Accessible.name: text
-        background: Rectangle {
-            radius: 18 * theme.radius
-            color: "transparent"
-            Rectangle {
-                anchors.fill: parent; radius: parent.radius; color: SpunStyle.selected; opacity: control.selected && control.pill ? 1 : 0
-                Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
-            }
-            SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: panel.app.ink; enabled: control.enabled; pressed: control.down; focused: control.visualFocus; hovered: control.hovered }
-            border.width: control.visualFocus ? 2 : 0
-            border.color: panel.app.accent
-        }
-        contentItem: SpunText {
-            text: control.text; color: control.selected ? panel.app.accent : panel.app.mutedInk
-            font.family: SpunStyle.family; font.pixelSize: SpunStyle.body; font.weight: Font.Medium
-            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-            opacity: control.enabled ? 1 : SpunStyle.disabledOpacity
-            Behavior on color { ColorAnimation { duration: panel.feedbackTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
-            Behavior on opacity { NumberAnimation { duration: panel.feedbackTime; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
-        }
+    component SmallButton: SpunChoiceButton {
+        ink: panel.app.ink; mutedInk: panel.app.mutedInk; accent: panel.app.accent
     }
     Rectangle {
         visible: !panel.detail && !panel.sessions && !panel.releases && !panel.forYou && panel.selectionCount === 0
@@ -547,6 +522,11 @@ Rectangle {
             TapHandler { acceptedButtons: Qt.RightButton; onTapped: panel.showActions(row.modelData, rowActions) }
             Keys.onPressed: event => { if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) { panel.showActions(row.modelData, rowActions); event.accepted = true } }
             SpunToolTip { visible: row.hovered && !rowActions.hovered && !trackMenu.visible && row.visible && !row.down; text: row.modelData.title + (row.modelData.artist ? "\n" + row.modelData.artist : "") + (row.song && !row.modelData.playable ? "\nUnavailable" : "") }
+        }
+        SpunLoading {
+            anchors.horizontalCenter: parent.horizontalCenter; y: parent.height / 2 - 38; width: 180
+            visible: panel.browser.busy && list.count === 0
+            label: "Loading library"
         }
         SpunText {
             anchors.centerIn: parent; width: 222

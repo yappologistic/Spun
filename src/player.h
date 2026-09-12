@@ -66,7 +66,14 @@ class Player : public QObject {
     Q_PROPERTY(QString importStatus READ importStatus NOTIFY importProgressChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
-    explicit Player(const QString &settingsPath, QObject *parent = nullptr);
+    explicit Player(const QString &settingsPath, QObject *parent = nullptr, bool external = false);
+    void setExternalName(const QString &name) { m_externalName = name; }
+    bool external() const { return m_external; }
+    void setExternalTracks(const QList<Track> &tracks, int index = 0, bool autoplay = true);
+    void appendExternalTracks(const QList<Track> &tracks);
+    void resolveExternal(const QString &key, const QUrl &source);
+    void setExternalArtwork(const QString &key, const QImage &image);
+    void failExternal(const QString &key, const QString &message);
     ~Player() override;
     QString trackKey() const { return currentUrl().toString(); }
     bool threeD() const { return m_threeD; }
@@ -100,8 +107,8 @@ public:
     QVariantList queue() const;
     int count() const { return m_tracks.size(); }
     int currentIndex() const { return m_index; }
-    bool playing() const { return m_playPending || (m_media && m_media->playbackState() == QMediaPlayer::PlayingState); }
-    QMediaPlayer::PlaybackState playbackState() const { return m_playPending ? QMediaPlayer::PlayingState : m_media ? m_media->playbackState() : QMediaPlayer::StoppedState; }
+    bool playing() const { return m_externalWantPlay || m_playPending || (m_media && m_media->playbackState() == QMediaPlayer::PlayingState); }
+    QMediaPlayer::PlaybackState playbackState() const { return (m_externalWantPlay || m_playPending) ? QMediaPlayer::PlayingState : m_media ? m_media->playbackState() : QMediaPlayer::StoppedState; }
     qint64 position() const { return m_restorePosition >= 0 ? m_restorePosition : m_media ? m_media->position() : 0; }
     qint64 duration() const { return m_media && m_media->duration() > 0 ? m_media->duration() : m_index >= 0 ? m_tracks[m_index].duration : 0; }
     double volume() const { return m_volume; }
@@ -157,6 +164,8 @@ public:
     static bool supported(const QString &path);
     static Track readTrack(const QString &path);
 signals:
+    void externalRequested(const QString &key);
+    void externalCancelled();
     void vinylChanged();
     void mediumChanged();
     void discDetailsChanged();
@@ -177,6 +186,10 @@ signals:
     void errorChanged();
     void imported();
 private:
+    QString m_externalName = "YouTube Music";
+    bool m_external = false, m_externalWantPlay = false;
+    QUrl m_externalSource;
+    QUrl mediaUrl() const { return m_external ? m_externalSource : currentUrl(); }
     void ensureMedia();
     void loadArt();
     void startArtLoad();

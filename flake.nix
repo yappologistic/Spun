@@ -57,6 +57,8 @@
             install -Dm644 ../assets/First-Light.flac "$out/share/spun/First-Light.flac"
             install -Dm644 ../assets/spun-icon.png "$out/share/icons/hicolor/512x512/apps/spun.png"
             install -Dm644 ../LICENSE "$out/share/licenses/spun/LICENSE"
+            install -Dm644 ../helper/youtube.py "$out/share/spun/youtube.py"
+            install -Dm644 ../licenses/Sung-MIT.txt "$out/share/licenses/spun/Sung-MIT.txt"
             install -Dm644 ../NOTICE "$out/share/licenses/spun/NOTICE"
             runHook postInstall
           '';

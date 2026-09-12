@@ -22,7 +22,7 @@
   <a href="#license">License</a>
 </p>
 
-Play local music or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record, cassette or TP-7-inspired recorder, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
+Play local music, browse YouTube Music anonymously, connect to Jellyfin, or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record, cassette or TP-7-inspired recorder, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
 
 **Source-available · PolyForm Noncommercial 1.0.0.** Personal and other permitted noncommercial use is free. This is not an OSI-approved open-source license. [Read the license details](#license).
 
@@ -136,12 +136,62 @@ Choose a medium in **More → Preferences**. All four share playback controls, a
 
 In the TP-7 view, toggle **TX–6** beside the player. It works in 2D and 3D, with a modeled USB-C cable between the devices.
 
-- Channel 1 carries local TP-7 audio. Right-click channels 2–6 to load additional local files; all channels follow TP-7 playback and seeking.
+- Channel 1 carries Local, YouTube or Jellyfin TP-7 audio. Right-click channels 2–6 to load additional local files; all channels follow TP-7 playback and seeking.
 - The knob rows adjust high, mid and low EQ. Drag a fader or click its track to set the level. Press a channel key to mute; Shift-click to solo, or press the mixer's Shift button first.
 - The master knob controls player volume. FX I adds stereo delay; FX II enables compression. Hide or power off the mixer to bypass it.
 - The paired 3D view expands to make controls easier to reach. Buttons press inward and spring back on release.
 
 Mixing happens inside Spun. External USB hardware, recording, MIDI, synth mode and separate aux/cue outputs are not supported. With Cider, only master volume works because Cider plays its own audio. Additional tracks use private temporary audio caches, removed on unload or normal exit, with a 512 MiB limit per track (about 23 minutes).
+
+### YouTube Music
+
+Choose **YouTube** in the source bar. Search songs, albums, artists and playlists,
+paste a YouTube or YouTube Music link, or use **Discover music**. Open an album or
+playlist to browse its songs; its menu offers **Play all**. Song menus provide
+queueing, radio, favorites, local playlists, album/artist navigation and link copying.
+Radio opens a suggested queue that you can play or edit.
+
+No Google login, account synchronization or browser cookies are used. Favorites,
+playlists, listening history and queue references stay on this device, separately
+from the Local queue. Playlist names and contents can be edited in the browser;
+history can be cleared from its menu. All four 2D/3D players, Mini, media keys,
+seeking, lyrics (when available) and the TX-6 audio route use the same native
+transport. Starting a song does not change the Local or Cider queue.
+
+YouTube support is optional. Install Python 3 with venv/pip support and Node.js,
+then run this from the source checkout:
+
+```sh
+./scripts/setup-youtube.sh
+```
+
+The helper runtime is isolated in `runtime/youtube`; it adds no browser engine
+and starts no background server. Local and Cider playback do not need it. After
+setup, use **Retry** if the YouTube panel was already open. The Nix package does
+not currently bundle the optional Python runtime; use the environment overrides
+below with a separately managed runtime.
+
+Audio is temporarily buffered before playback, with a 64 MiB limit per song and
+at most one next-song buffer. Buffers are removed when replaced or on normal exit;
+they are not an offline music library. Track starts depend on the network and may
+pause briefly. This unofficial integration depends on `ytmusicapi` and `yt-dlp`;
+YouTube changes can require dependency updates. Account-only or otherwise
+restricted songs may not play anonymously. There is no guarantee of gapless
+playback or parity with the official service.
+
+Local YouTube data is in `youtube/library.json` beside Spun's settings file.
+`--config /path/to/settings.ini` also isolates that library. `SPUN_YOUTUBE_PYTHON`
+and `SPUN_YOUTUBE_HELPER` can point to a separately managed runtime and helper.
+
+### Connect to Jellyfin
+
+Choose **Jellyfin**, then **Connect**. Enter your server URL (including its base path, if configured), username and password. Use HTTPS for remote servers. **Remember connection** stores the access token in the desktop keyring through `secret-tool`; passwords are never saved. Without a working keyring, sign in each time.
+
+Browse and search albums, artists, songs and playlists. Item menus provide favorites, queueing and playlist editing, including reordering and removal. Playlist permissions come from the server. Library actions include recently played songs, genres, refresh and server settings. Settings let you select a music library, choose original quality or 128/192/320 kbps, and turn playback reporting off.
+
+Jellyfin uses the same transport, queue, desktop media controls, timed lyrics and 2D/3D players as local music, including TX-6. Queues are saved separately for each server account and restore paused. Artwork and audio are fetched with authenticated requests; tokens are not embedded in shared links or saved queue entries.
+
+Playback currently buffers one song to a temporary file before it starts, with a 512 MiB limit per song. Transcoding requires permission on your server. Collections are limited to 20,000 entries. This integration is for music; video, offline downloads and server administration are not included.
 
 ### Browse through Cider
 
@@ -173,7 +223,7 @@ Cider changes refresh the visible queue and relevant details. Temporary connecti
 
 Choose your font, interface size, background blur, animations and media appearance in **More → Preferences**. Spun follows Noctalia's colors and reduced-motion setting when available. Reduced motion also skips loading sequences and perspective tilt.
 
-Spun's desktop media entry follows the selected Local or Cider source, including artwork, playback state, volume and seeking. Cider may also expose its own entry. Hyprland integration depends on the compositor's supported interfaces.
+Spun's desktop media entry follows the selected Local, Cider, YouTube or Jellyfin source, including artwork, playback state, volume and seeking. Cider may also expose its own entry. Hyprland integration depends on the compositor's supported interfaces.
 
 **Audio settings** contains crossfade and, where supported by Cider, Automix and listening modes. **Audio quality** in the current song's menu shows what Cider reports and labels device output separately.
 
@@ -249,6 +299,8 @@ ctest --test-dir build --output-on-failure
 
 Tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. Desktop-control tests use a private D-Bus session. Diagnostics are separate from the normal player.
 
+The registered YouTube test uses local fixtures and needs no network or provider runtime. Run `python3 tests/test_youtube.py` for helper parsing checks. After setting up the optional runtime, `./build/spun --test-youtube-live` checks anonymous browsing, playback, seeking and artwork against the live service with temporary settings. `./scripts/preview-youtube.sh` opens a separate local preview profile with Cider and desktop media registration disabled.
+
 For focused player, artwork, lighting, geometry and media checks:
 
 ```bash
@@ -256,6 +308,15 @@ For focused player, artwork, lighting, geometry and media checks:
 ```
 
 The default uses offscreen CPU rendering through Mesa and requires an available X display for its OpenGL context. It does not create visible windows. It checks CD, cassette, recorder, turntable and TX-6 controls, mixer audio processing, physical rotation, seeking, rendered artwork and palette changes without exercising the full native window lifecycle.
+
+Jellyfin protocol tests run with CTest. For real-server integration checks, install a Jellyfin server binary and FFmpeg, then run:
+
+```bash
+python3 scripts/test-jellyfin-server.py --server-binary /path/to/jellyfin \
+  --test-binary build/spun-diagnostics --output /tmp/spun-jellyfin-test
+```
+
+This creates a private, disposable server with generated FLAC, MP3 and Opus music, two libraries and test accounts. It tests authentication, browsing, pagination, playlists, favorites, playback, seeking, lyrics, artwork, reporting and source isolation, then stops the server. Add `--renderer 3d` for software-rendered 3D checks, or `--renderer native` in a separate Wayland test session. Test output contains temporary credentials and must not be committed or shared. Jellyfin 10.11 and 12 are tested; other server versions and plugins may behave differently.
 
 For the complete 3D interaction and Cider-fixture suites, run `SPUN_TEST_RENDERER=native ./scripts/test-3d.sh` in a separate Wayland or X11 test session. This includes projected seeking, tonearm gestures, lid transitions, scaling and mode combinations. Set `SPUN_TEST_SCREEN` to the dedicated output name and `SPUN_TEST_OUTPUT` to a local capture directory. Missing 3D rendering fails the checks instead of silently skipping them.
 

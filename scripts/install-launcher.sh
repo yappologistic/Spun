@@ -11,7 +11,7 @@ def escape(value):
 content = f'''[Desktop Entry]
 Type=Application
 Name=Spun
-Comment=CD-shaped music player for local files and Cider.
+Comment=Music player for local files, Cider, YouTube Music and Jellyfin.
 Exec="{escape(root / 'scripts/run.sh')}" %F
 Icon={root / 'assets/spun-icon.png'}
 Terminal=false

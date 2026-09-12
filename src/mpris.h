@@ -50,7 +50,7 @@ class PlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(bool CanSeek READ canSeek)
     Q_PROPERTY(bool CanControl READ always CONSTANT)
 public:
-    explicit PlayerAdaptor(Player *p, Cider *cider = nullptr);
+    explicit PlayerAdaptor(Player *p, Cider *cider = nullptr, Player *youtube = nullptr, Player *jellyfin = nullptr);
     void setRemote(bool remote);
     void setSourceWindow(QObject *window);
     QString trackId() const;
@@ -80,7 +80,7 @@ public slots:
     void Play() { if (canControl()) { if (m_remote) m_cider->play(); else m_player->play(); } }
     void Seek(qlonglong offset);
     void SetPosition(const QDBusObjectPath &trackId, qlonglong position);
-    void OpenUri(const QString &uri) { m_player->addUrls({QUrl(uri)}); }
+    void OpenUri(const QString &uri) { m_local->addUrls({QUrl(uri)}); }
 signals:
     void Seeked(qlonglong position);
 private slots:
@@ -89,10 +89,13 @@ private:
     void changed();
     void seekTo(qint64 position);
     Player *m_player;
+    Player *m_local;
+    Player *m_youtube;
+    Player *m_jellyfin;
     Cider *m_cider;
     QPointer<QObject> m_sourceWindow;
     bool m_remote = false, m_changePending = false;
     QVariantMap m_lastProperties;
 };
 
-PlayerAdaptor *registerMpris(Player *player, Cider *cider);
+PlayerAdaptor *registerMpris(Player *player, Cider *cider, Player *youtube = nullptr, Player *jellyfin = nullptr);

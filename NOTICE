@@ -41,3 +41,15 @@ The approved screenshot in assets/screenshots/spun-vinyl.png illustrates
 Spun in use. Third-party album artwork and other third-party imagery shown
 in it retain their respective rights and are not relicensed under Spun's
 PolyForm Noncommercial license.
+
+Anonymous YouTube Music provider
+-------------------------------
+The normalization and catalog helper in helper/youtube.py is adapted from Sung,
+Copyright (c) 2026 Sung contributors, under the MIT license.
+See licenses/Sung-MIT.txt. Optional runtime dependencies are installed separately:
+ytmusicapi and yt-dlp. Spun is not affiliated with Google or YouTube.
+
+The Jellyfin client, LRC parser, protocol tests and disposable-server fixture in
+src/jellyfinapi.*, src/jellyfinlrc.h, src/jellyfinprotocoltest.cpp and
+scripts/test-jellyfin-server.py are adapted from Sung, Copyright (c) 2026 Sung
+contributors, under the MIT license. See licenses/Sung-MIT.txt.

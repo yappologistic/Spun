@@ -51,6 +51,7 @@ public:
     Q_INVOKABLE void load(int channel, const QUrl &file);
     Q_INVOKABLE void unload(int channel);
     Q_INVOKABLE void reset();
+    Q_INVOKABLE void setPlayer(Player *player);
     void consume(const QAudioBuffer &buffer);
     void flush();
     static QAudioFormat format();

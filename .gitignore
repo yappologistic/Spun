@@ -51,3 +51,12 @@
 __pycache__/
 cider-connection.json
 listening.json
+
+!/helper/
+/helper/*
+!/helper/youtube.py
+!/helper/requirements.txt
+!/tests/
+/tests/*
+!/tests/youtube_fixture.py
+!/tests/test_youtube.py
