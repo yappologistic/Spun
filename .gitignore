@@ -60,3 +60,4 @@ listening.json
 /tests/*
 !/tests/youtube_fixture.py
 !/tests/test_youtube.py
+!/tests/REGRESSION.md

@@ -244,6 +244,8 @@ For the intended appearance, we recommend [Google Sans Flex](https://github.com/
 <details>
 <summary><strong>Keyboard shortcuts</strong></summary>
 
+Immersive mode hides controls after inactivity; move the pointer or use the keyboard to reveal them. Press Y for lyrics or Escape to leave.
+
 | Action | Shortcut |
 | --- | --- |
 | Play / pause | Space |
@@ -258,6 +260,7 @@ For the intended appearance, we recommend [Google Sans Flex](https://github.com/
 | Toggle focused browser track | Space (track list focused) |
 | Select tracks / range | Ctrl-click / Shift-click |
 | Mini mode | Ctrl + M |
+| Immersive mode | Ctrl + I |
 | Flip medium / switch lyrics | F / Y |
 | Mute | M |
 | Keyboard help | F1 |

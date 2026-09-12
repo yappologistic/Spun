@@ -366,6 +366,8 @@ else:
     };
     client.browse({{"mode", "playlist"}, {"remoteId", "p"}}, callback);
     QTRY_VERIFY(done);
+    QVERIFY(result.value("editable").toBool());
+    QVERIFY(result.value("deletable").toBool());
     auto rows = result.value("items").toList();
     QCOMPARE(rows.size(), 3);
     auto first = rows[0].toMap().value("entryId").toString(),
@@ -395,6 +397,11 @@ else:
     QVERIFY(error.contains("changed"));
     QCOMPARE(mutations, count);
     owner = "someone-else";
+    done = false;
+    client.browse({{"mode", "playlist"}, {"remoteId", "p"}}, callback);
+    QTRY_VERIFY(done);
+    QVERIFY(!result.value("editable").toBool());
+    QVERIFY(!result.value("deletable").toBool());
     done = false;
     client.removePlaylist("p", callback);
     QTRY_VERIFY(done);

@@ -25,7 +25,7 @@ static QString text(const TagLib::String &s) { return QString::fromStdString(s.t
 
 Player::Player(const QString &settingsPath, QObject *parent, bool external)
     : QObject(parent), m_external(external), m_settings(settingsPath, QSettings::IniFormat) {
-    connect(this, &Player::queueChanged, this, [this] { m_tracksDirty = true; });
+    connect(this, &Player::queueChanged, this, [this] { m_tracksDirty = true; m_plannedNext.clear(); });
     connect(this, &Player::trackChanged, this, &Player::discDetailsChanged);
     connect(this, &Player::queueChanged, this, &Player::discDetailsChanged);
     connect(&m_audioPreparation, &QFutureWatcherBase::finished, this, [this] {
@@ -280,6 +280,8 @@ void Player::select(int index, bool autoplay) {
     m_restorePosition = -1;
     dismissError();
     m_index = index;
+    m_plannedNext.clear();
+    m_priorityNext.clear();
     m_shuffleVisited.insert(m_tracks[index].path);
     if (m_media) m_media->setSource(mediaUrl());
     loadArt();
@@ -384,6 +386,7 @@ bool Player::playAlbumPosition(const QString &path, qint64 position) {
 void Player::next(bool automatic, bool autoplay) {
     if (!count()) return;
     if (automatic && m_repeat == 2) { seek(0); play(); return; }
+    if (m_index + 1 < count() && !m_priorityNext.isEmpty() && m_tracks[m_index + 1].path == m_priorityNext) { select(m_index + 1, autoplay); return; }
     if (m_vinylAlbumMode && vinyl()) {
         const auto rows = discDetails().value("tracks").toList();
         const bool mapped = rows.size()>=2 && rows.size()<=500 && std::all_of(rows.cbegin(),rows.cend(),[](const QVariant &row){return row.toMap().value("duration").toLongLong()>0;});
@@ -403,7 +406,10 @@ void Player::next(bool automatic, bool autoplay) {
             m_shuffleVisited.insert(m_tracks[m_index].path);
             for (int i = 0; i < count(); ++i) if (i != m_index) candidates.append(i);
         }
-        select(candidates[QRandomGenerator::global()->bounded(candidates.size())], autoplay);
+        int selected = -1;
+        for (int i : candidates) if (m_tracks[i].path == m_plannedNext) selected = i;
+        if (selected < 0) selected = candidates[QRandomGenerator::global()->bounded(candidates.size())];
+        select(selected, autoplay);
         return;
     }
     if (m_index + 1 < count()) select(m_index + 1, autoplay);
@@ -468,6 +474,7 @@ void Player::setVolume(double value) {
     else emit volumeChanged();
 }
 void Player::setShuffle(bool value) {
+    m_plannedNext.clear();
     m_shuffle = value; m_shuffleVisited.clear();
     if (m_index >= 0) m_shuffleVisited.insert(m_tracks[m_index].path);
     emit settingsChanged(); save();
@@ -606,6 +613,46 @@ void Player::appendExternalTracks(const QList<Track> &tracks) {
     if (!m_external || tracks.isEmpty()) return;
     const bool empty = m_tracks.isEmpty(); m_tracks.append(tracks); emit queueChanged();
     if (empty) select(0, false);
+}
+void Player::insertExternalNext(const QList<Track> &tracks) {
+    if (!m_external || tracks.isEmpty()) return;
+    if (m_index < 0) { appendExternalTracks(tracks); return; }
+    int at = m_index + 1;
+    for (const auto &track : tracks) m_tracks.insert(at++, track);
+    m_priorityNext = tracks.first().path;
+    emit queueChanged();
+}
+int Player::nextTrackIndex(bool automatic) const {
+    if (m_index < 0 || !count() || (automatic && m_repeat == 2)) return -1;
+    if (m_index + 1 < count() && !m_priorityNext.isEmpty() && m_tracks[m_index + 1].path == m_priorityNext) return m_index + 1;
+    if (m_vinylAlbumMode && vinyl()) {
+        const auto rows = discDetails().value("tracks").toList();
+        const bool mapped = rows.size() >= 2 && rows.size() <= 500 && std::all_of(rows.cbegin(), rows.cend(), [](const QVariant &row) { return row.toMap().value("duration").toLongLong() > 0; });
+        for (int i = 0; mapped && i < rows.size(); ++i) if (rows[i].toMap().value("current").toBool())
+            return i + 1 < rows.size() ? rows[i + 1].toMap().value("index").toInt() : (!automatic || m_repeat == 1) ? rows.first().toMap().value("index").toInt() : -1;
+    }
+    if (m_shuffle && count() > 1) {
+        QList<int> candidates;
+        for (int i = 0; i < count(); ++i) if (!m_shuffleVisited.contains(m_tracks[i].path)) candidates.append(i);
+        if (candidates.isEmpty()) {
+            if (automatic && m_repeat == 0) return -1;
+            for (int i = 0; i < count(); ++i) if (i != m_index) candidates.append(i);
+        }
+        for (int i : candidates) if (m_tracks[i].path == m_plannedNext) return i;
+        const int i = candidates[QRandomGenerator::global()->bounded(candidates.size())];
+        m_plannedNext = m_tracks[i].path;
+        return i;
+    }
+    return m_index + 1 < count() ? m_index + 1 : (!automatic || m_repeat == 1) ? 0 : -1;
+}
+void Player::retryExternal() {
+    if (!m_external || m_index < 0) return;
+    // Re-resolve the same queue entry, including decoder failures of a cached file.
+    pause();
+    if (m_media) m_media->setSource({});
+    m_externalSource = QUrl();
+    m_restorePosition = -1;
+    play();
 }
 void Player::resolveExternal(const QString &key, const QUrl &source) {
     if (!m_external || key != trackKey() || !source.isLocalFile() || !QFileInfo::exists(source.toLocalFile())) return;

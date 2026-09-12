@@ -933,6 +933,7 @@ void JellyfinApi::file(const QUrl &u, const QString &path, qint64 limit,
   }
   f->setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
   auto req = request(u);
+  if (channel == "prefetch") req.setPriority(QNetworkRequest::LowPriority);
   req.setTransferTimeout(30000);
   auto *r = m_network.get(req);
   m_channels[channel] = r;

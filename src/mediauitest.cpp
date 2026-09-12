@@ -52,6 +52,62 @@ int exerciseMediaUi(Player &player, QQuickWindow *window, const QString &temp, c
         files.append(QUrl::fromLocalFile(path));
     }
     player.addUrls(files,false);check(wait([&]{return !player.busy();})&&player.count()==3,"album fixture imports three tracks");
+    // Immersion reuses the physical player and never changes playback state.
+    window->setProperty("queueOpen", true);
+    window->contentItem()->forceActiveFocus(Qt::MouseFocusReason);
+    QTest::mouseMove(window, item("playButton")->mapToScene(QPointF(28,24)).toPoint());
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(wait([&]{return window->property("immersive").toBool();}), "Ctrl+I enters immersive mode");
+    check(!window->property("sideOpen").toBool(), "immersion closes secondary panels");
+    check(wait([&]{return window->property("chromeHidden").toBool();}), "idle immersion hides chrome");
+    check(item("sourceBar")->opacity()==0 && item("playerDeck")->opacity()==0, "reduced motion hides chrome without animation");
+    QTest::qWait(1300);
+    check(window->property("chromeHidden").toBool(), "stationary synthetic hover does not reveal idle controls");
+    const auto *idleTip = item("playButton")->findChild<QObject *>("spunToolTip");
+    check(idleTip && !idleTip->property("visible").toBool(), "hidden immersive controls also dismiss their tooltips");
+    capture("immersive-idle");
+    QTest::keyClick(window, Qt::Key_Space);
+    check(!window->property("chromeHidden").toBool(), "keyboard playback shortcut reveals immersive controls");
+    player.pause();
+    window->setProperty("chromeIdle", true);
+    QTest::mouseMove(window, QPoint(270, 560));
+    check(wait([&]{return !window->property("chromeHidden").toBool();}), "pointer movement restores immersive controls");
+    QTest::keyClick(window, Qt::Key_Tab);
+    QTest::qWait(3100);
+    check(!window->property("chromeHidden").toBool(), "keyboard focus keeps immersive controls visible");
+    capture("immersive-controls");
+    QTest::keyClick(window, Qt::Key_Escape);
+    check(!window->property("immersive").toBool() && window->property("queueOpen").toBool(), "Escape exits immersion and restores previous queue panel");
+    window->setProperty("queueOpen", false);
+    // Repeated entry must refresh the saved panels and preserve transport.
+    const auto immersionTrack = player.trackKey();
+    const int immersionCount = player.count();
+    player.setMiniMode(true);
+    QTest::qWait(100);
+    window->contentItem()->forceActiveFocus(Qt::MouseFocusReason);
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(window->property("immersive").toBool() && !player.miniMode(), "immersion exits mini mode");
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(!window->property("immersive").toBool() && !window->property("sideOpen").toBool(), "leaving immersion from mini keeps panels closed");
+    window->setProperty("libraryOpen", true);
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(window->property("immersive").toBool() && !window->property("sideOpen").toBool(), "immersion closes the previously open library");
+    QTest::keyClick(window, Qt::Key_F1);
+    check(window->property("helpOpen").toBool(), "keyboard help opens during immersion");
+    window->setProperty("chromeIdle", true);
+    check(!window->property("chromeHidden").toBool(), "open help keeps immersive controls visible");
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(window->property("immersive").toBool(), "immersion shortcut is suppressed while help is open");
+    window->setProperty("helpOpen", false);
+    QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    check(!window->property("immersive").toBool() && window->property("libraryOpen").toBool() && !window->property("queueOpen").toBool(), "second immersion restores library instead of stale queue state");
+    window->setProperty("libraryOpen", false);
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_I, Qt::ControlModifier);
+    }
+    check(!window->property("immersive").toBool() && !window->property("sideOpen").toBool(), "repeated immersion toggles leave panels closed");
+    check(player.trackKey() == immersionTrack && player.count() == immersionCount && !player.playing(), "immersion toggles preserve the paused song and queue");
     // Check actual reverse pixels: valid theme properties alone missed a
     // hardcoded silver backing behind light ink in the CD/cassette booklets.
     {

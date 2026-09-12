@@ -425,8 +425,10 @@ QVariantMap SubsonicApi::item(const QVariantMap &raw,
     cover.setPath("/" + m_identity + "/" + raw.value("coverArt").toString());
     out["art"] = cover.toString();
   }
-  if (kind == "playlist")
+  if (kind == "playlist") {
     out["editable"] = raw.value("owner").toString() == m_username;
+    out["deletable"] = out["editable"];
+  }
   return out;
 }
 QVariantList SubsonicApi::items(const QVariant &rows,
@@ -726,9 +728,10 @@ void SubsonicApi::browse(const QVariantMap &req, Reply callback,
           result["artist"] = container.value("artist");
           result["year"] = container.value("year");
         }
-        if (mode == "playlist")
-          result["editable"] =
-              container.value("owner").toString() == m_username;
+        if (mode == "playlist") {
+          result["editable"] = container.value("owner").toString() == m_username;
+          result["deletable"] = result["editable"];
+        }
         callback(result, {});
       },
       channel);
@@ -814,6 +817,7 @@ void SubsonicApi::download(const QVariantMap &track, const QString &path,
   if (bitrate())
     p.append(QPair<QString, QString>{"maxBitRate", QString::number(bitrate())});
   QNetworkRequest request(url("stream", p));
+  if (channel == "prefetch") request.setPriority(QNetworkRequest::LowPriority);
   request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
   request.setTransferTimeout(30000);
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,

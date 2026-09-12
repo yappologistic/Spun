@@ -71,6 +71,10 @@ public:
     bool external() const { return m_external; }
     void setExternalTracks(const QList<Track> &tracks, int index = 0, bool autoplay = true);
     void appendExternalTracks(const QList<Track> &tracks);
+    void insertExternalNext(const QList<Track> &tracks);
+    int nextTrackIndex(bool automatic = true) const;
+    QString queuedTrackKey(int index) const { return index >= 0 && index < count() ? m_tracks[index].path : QString(); }
+    Q_INVOKABLE void retryExternal();
     void resolveExternal(const QString &key, const QUrl &source);
     void setExternalArtwork(const QString &key, const QImage &image);
     void failExternal(const QString &key, const QString &message);
@@ -212,6 +216,8 @@ private:
     quint64 m_artGeneration = 0;
     bool m_artLoading = false, m_artJobActive = false;
     QSet<QString> m_shuffleVisited;
+    mutable QString m_plannedNext;
+    QString m_priorityNext;
     QString m_artFile, m_error;
     bool m_ciderAutoStart = false;
     bool m_threeD=false;

@@ -11,6 +11,9 @@ class RemoteLibrary : public QObject {
   Q_PROPERTY(Player *transport READ transport CONSTANT)
   Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY changed)
   Q_PROPERTY(bool busy READ busy NOTIFY changed)
+  Q_PROPERTY(bool buffering READ buffering NOTIFY changed)
+  Q_PROPERTY(QVariantMap viewState READ viewState WRITE setViewState NOTIFY
+                 viewRestored)
   Q_PROPERTY(bool more READ more NOTIFY changed)
   Q_PROPERTY(bool actionBusy READ actionBusy NOTIFY changed)
   Q_PROPERTY(QString error READ error NOTIFY changed)
@@ -36,6 +39,9 @@ public:
   bool enabled() const { return m_enabled; }
   void setEnabled(bool);
   bool busy() const { return m_busy; }
+  bool buffering() const { return m_buffering; }
+  QVariantMap viewState() const { return m_viewState; }
+  void setViewState(const QVariantMap &state) { m_viewState = state; }
   bool more() const { return m_more; }
   bool actionBusy() const { return m_actionBusy; }
   QString error() const { return m_error; }
@@ -56,6 +62,8 @@ public:
   Q_INVOKABLE void playItems(const QVariantList &, int index = 0);
   Q_INVOKABLE void playItem(const QVariantMap &);
   Q_INVOKABLE void enqueue(const QVariantMap &);
+  Q_INVOKABLE void playNext(const QVariantMap &);
+  Q_INVOKABLE void retry();
   Q_INVOKABLE bool favorite(const QString &id) const {
     return m_api.isStarred(id);
   }
@@ -81,9 +89,13 @@ signals:
   void currentIndexChanged();
   void feedback(const QString &message, bool error);
   void artworkChanged();
+  void viewRestored();
 
 private:
-  void browse(const QVariantMap &, bool append = false);
+  void browse(const QVariantMap &, bool append = false, bool refresh = false);
+  void savePage();
+  void cancelPrefetch();
+  void prefetch();
   void loadCurrent();
   void loadArt();
   void loadThumbs();
@@ -113,6 +125,14 @@ private:
   QString m_thumbActive;
   std::shared_ptr<QTemporaryDir> m_audio, m_art;
   QTemporaryDir m_thumbnailDirectory;
-  QTimer m_save, m_reportTimer;
+  QTimer m_save, m_reportTimer, m_prefetchTimer;
+  bool m_buffering = false, m_prefetchReady = false;
+  quint64 m_audioGeneration = 0, m_prefetchGeneration = 0;
+  int m_prefetchBitrate = -1;
+  QString m_prefetchKey, m_audioKey, m_observedKey, m_pageFolder;
+  std::shared_ptr<QTemporaryDir> m_prefetched;
+  QVariantMap m_viewState;
+  QHash<QString, QVariantMap> m_pages;
+  QStringList m_pageOrder;
   LyricTimeline m_timeline;
 };

@@ -175,6 +175,24 @@ int exerciseJellyfin(Player &local, Jellyfin &jf, QQuickWindow *window,
   check(until([&] { return !jf.busy(); }) && jf.items().size() == 105 &&
             !jf.more(),
         "search pagination returns all 105 songs");
+  QTest::qWait(100);
+  auto *results = find(window->contentItem(), "jellyfinResults");
+  if (!check(results != nullptr,
+             "Jellyfin results are available for scroll restoration"))
+    return 1;
+  results->setProperty("contentY", 700);
+  QMetaObject::invokeMethod(find(window->contentItem(), "jellyfinPanel"),
+                            "saveView");
+  click("localSourceButton");
+  click("jellyfinSourceButton");
+  check(until([&] {
+          auto *view = find(window->contentItem(), "jellyfinResults");
+          return view && qAbs(view->property("contentY").toReal() - 700) < 2;
+        }),
+        "source switch restores library scroll position");
+  auto *searchField = find(window->contentItem(), "jellyfinSearch");
+  check(searchField && searchField->property("text").toString() == "Fixture",
+        "source switch restores search query");
   QSet<QString> ids;
   for (const auto &v : jf.items())
     ids.insert(v.toMap().value("id").toString());
@@ -360,7 +378,50 @@ int exerciseJellyfin(Player &local, Jellyfin &jf, QQuickWindow *window,
         "source switch preserves local queue and pauses Jellyfin");
   click("jellyfinSourceButton");
   check(player->count() == 2, "Jellyfin queue survives source switching");
+  const auto beforeNextKey = player->trackKey();
+  auto *panel = find(window->contentItem(), "jellyfinPanel");
+  if (!check(panel != nullptr, "Jellyfin panel is available for menu checks"))
+    return 1;
+  QMetaObject::invokeMethod(panel, "menuFor", Q_ARG(QVariant, QVariant(first)),
+                            Q_ARG(QVariant, QVariant(-1)),
+                            Q_ARG(QVariant, QVariant()));
+  check(until([&] {
+          auto *action = find(window->contentItem(), "jellyfinPlayNext");
+          return action && action->isVisible();
+        }),
+        "Play next is available in remote song menu");
+  capture("jellyfin-play-next-menu");
+  click("jellyfinPlayNext");
+  check(player->count() == 3 && player->trackKey() == beforeNextKey &&
+            player->queue()[player->currentIndex() + 1].toMap().value(
+                "title") == first.value("title"),
+        "Play next inserts without restarting current song");
+  player->remove(player->currentIndex() + 1);
+  player->failExternal(player->trackKey(),
+                       "Connection interrupted. Retry this song.");
+  check(until([&] {
+          auto *retry = find(window->contentItem(), "remotePlaybackRetry");
+          return retry && retry->isVisible();
+        }),
+        "failed remote playback exposes inline Retry");
+  capture("jellyfin-retry");
+  click("remotePlaybackRetry");
+  check(player->trackKey() == beforeNextKey && player->count() == 2 &&
+            until([&] {
+              return player->position() > 200 && player->error().isEmpty();
+            }),
+        "Retry reloads same song and preserves queue");
+  player->pause();
   window->setProperty("libraryOpen", false);
+  window->setProperty("immersive", true);
+  window->setProperty("discFlipped", true);
+  window->setProperty("lyricsView", true);
+  check(until([&] { return !jf.loading() && jf.lines().size() == 3; }),
+        "immersive lyrics use the current server timeline");
+  QTest::qWait(200);
+  capture("jellyfin-immersive-lyrics");
+  window->setProperty("discFlipped", false);
+  window->setProperty("immersive", false);
   local.setShowPlayerBody(true);
   for (const auto &medium : QStringList{"cd", "vinyl", "cassette", "tp7"}) {
     local.setMedium(medium);

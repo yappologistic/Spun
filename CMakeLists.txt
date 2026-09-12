@@ -148,3 +148,15 @@ if(BUILD_TESTING)
     add_test(NAME spun-subsonic-protocol COMMAND spun-subsonic-protocol-test)
     set_tests_properties(spun-subsonic-protocol PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")
 endif()
+
+if(BUILD_TESTING)
+    qt_add_executable(spun-remote-library-test src/remotelibrarytest.cpp)
+    target_link_libraries(spun-remote-library-test PRIVATE spun_core Qt6::Test)
+    add_test(NAME spun-remote-library COMMAND spun-remote-library-test)
+    set_tests_properties(spun-remote-library PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")
+    add_test(NAME spun-immersive-media-ui COMMAND spun --test-media-ui)
+    set_tests_properties(spun-remote-library PROPERTIES TIMEOUT 120 LABELS "remote;regression")
+    set_tests_properties(spun-immersive-media-ui PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME="
+        TIMEOUT 180 LABELS "ui;regression")
+endif()

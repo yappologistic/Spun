@@ -16,7 +16,11 @@ inline QImage captureTestWindow(QQuickWindow *window) {
         || qEnvironmentVariable("QT_QUICK_BACKEND") == "software")
         return window->grabWindow();
 
-    const auto result = window->contentItem()->grabToImage();
+    // Explicit pixel dimensions avoid an old offscreen drawable size surviving
+    // a resize while a transient notice is leaving the scene.
+    const QSize pixels(qRound(window->width() * window->devicePixelRatio()),
+                       qRound(window->height() * window->devicePixelRatio()));
+    const auto result = window->contentItem()->grabToImage(pixels);
     if (!result) return {};
     QElapsedTimer timer;
     timer.start();

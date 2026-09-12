@@ -25,7 +25,24 @@ Rectangle {
     }
     color: app.surface
     radius: SpunStyle.panelRadius
-    onProviderChanged: { closeActions(); search.text = ""; selected = ({}); selectedIndex = -1; searchFilter = "albums" }
+    property bool restoringView: false
+    onProviderChanged: { closeActions(); selected = ({}); selectedIndex = -1; Qt.callLater(restoreView) }
+    Component.onCompleted: restoreView()
+    function saveView() {
+        if (!provider || restoringView) return;
+        provider.viewState = { query: search.text, filter: searchFilter, y: list.contentY, index: list.currentIndex };
+    }
+    function restoreView() {
+        if (!provider) return;
+        restoringView = true;
+        const state = provider.viewState;
+        search.text = state.query || "";
+        const filter = state.filter || selectedPage;
+        searchFilter = ["albums", "artists", "songs", "playlists"].includes(filter) ? filter : ["albums", "artists", "songs", "playlists"].includes(selectedPage) ? selectedPage : "songs";
+        list.currentIndex = state.index === undefined ? -1 : Math.min(state.index, list.count - 1);
+        list.contentY = Math.max(list.originY, Math.min(state.y || 0, Math.max(list.originY, list.contentHeight - list.height)));
+        restoringView = false;
+    }
     function closeActions() {
         actions.close();
         pageActions.close();
@@ -78,6 +95,7 @@ Rectangle {
     }
     Connections {
         target: provider
+        function onViewRestored() { Qt.callLater(panel.restoreView) }
         function onChanged() {
             panel.revision++;
         }
@@ -151,8 +169,7 @@ Rectangle {
                 Keys.onReturnPressed: clicked()
                 Keys.onEnterPressed: clicked()
                 onClicked: {
-                    panel.searchFilter = modelData;
-                    search.text = "";
+                    panel.saveView();
                     provider.show(modelData);
                 }
             }
@@ -177,7 +194,8 @@ Rectangle {
         height: 44
         maximumLength: 512
         placeholderText: "Search " + panel.searchFilter
-        onAccepted: provider.search(text, panel.searchFilter)
+        onTextEdited: panel.saveView()
+        onAccepted: { panel.saveView(); provider.search(text, panel.searchFilter) }
         Keys.onDownPressed: {
             list.forceActiveFocus();
             if (list.count)
@@ -192,7 +210,7 @@ Rectangle {
         tip: "Back"
         ink: panel.app.ink
         enabled: provider.canBack
-        onClicked: provider.back()
+        onClicked: { panel.saveView(); provider.back() }
     }
     SpunText {
         visible: server.connected
@@ -246,7 +264,8 @@ Rectangle {
     SpunLoading {
         objectName: panel.prefix + "Loading"
         x: 24
-        y: 160
+        y: 152
+        height: 8
         width: parent.width - 48
         visible: server.connected && provider.busy
         label: "Loading music"
@@ -258,16 +277,18 @@ Rectangle {
         y: 164
         width: parent.width - 16
         height: parent.height - y - 56
-        visible: server.connected && !provider.error.length
+        visible: server.connected && provider.items.length > 0
         model: provider.items
         clip: true
         spacing: 2
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
-        Keys.onReturnPressed: if (currentIndex >= 0)
-            provider.open(provider.items[currentIndex])
-        Keys.onEnterPressed: if (currentIndex >= 0)
-            provider.open(provider.items[currentIndex])
+        onMovementEnded: panel.saveView()
+        function openCurrent() { if (currentIndex >= 0) { panel.saveView(); provider.open(provider.items[currentIndex]) } }
+        Keys.onReturnPressed: openCurrent()
+        Keys.onEnterPressed: openCurrent()
+        Keys.onUpPressed: { decrementCurrentIndex(); panel.saveView() }
+        Keys.onDownPressed: { incrementCurrentIndex(); panel.saveView() }
         delegate: ItemDelegate {
             id: row
             required property var modelData
@@ -294,6 +315,7 @@ Rectangle {
             }
             onClicked: {
                 list.currentIndex = index;
+                panel.saveView();
                 provider.open(modelData);
             }
             Image {
@@ -353,12 +375,13 @@ Rectangle {
     }
     Column {
         x: 24
-        y: 210
+        y: provider.items.length ? parent.height - 56 : 210
         width: parent.width - 48
         spacing: 12
         visible: server.connected && !provider.busy && (!!provider.error.length || !provider.items.length)
         SpunText {
             width: parent.width
+            visible: !provider.items.length
             text: provider.error || "No results"
             wrapMode: Text.WordWrap
             color: provider.error.length ? theme.colors.error : panel.app.mutedInk
@@ -366,13 +389,14 @@ Rectangle {
         }
         SpunButton {
             text: "Retry"
+            Accessible.description: provider.error
             visible: !!provider.error.length
             onClicked: provider.reload()
         }
     }
     SpunButton {
         objectName: panel.prefix + "More"
-        visible: server.connected && provider.more
+        visible: server.connected && provider.more && !provider.error.length
         enabled: !provider.busy
         anchors.horizontalCenter: parent.horizontalCenter
         y: parent.height - 48
@@ -381,7 +405,7 @@ Rectangle {
     }
     component Action: MenuItem {
         id: action
-        implicitHeight: 40
+        implicitHeight: 48
         font.family: SpunStyle.family
         contentItem: SpunText {
             text: action.text
@@ -453,7 +477,7 @@ Rectangle {
         Action {
             text: "Rename playlist…"
             visible: panel.playlistPage && !!provider.collection.editable
-            height: visible ? 40 : 0
+            height: visible ? 48 : 0
             enabled: !provider.actionBusy
             onTriggered: {
                 panel.renameId = provider.collection.remoteId;
@@ -462,9 +486,10 @@ Rectangle {
             }
         }
         Action {
+            objectName: panel.prefix + "DeletePlaylist"
             text: "Delete playlist…"
             visible: panel.playlistPage && !!provider.collection.deletable
-            height: visible ? 40 : 0
+            height: visible ? 48 : 0
             enabled: !provider.actionBusy
             onTriggered: deleteDialog.open()
         }
@@ -484,6 +509,12 @@ Rectangle {
         Action {
             text: panel.selected.kind === "song" ? "Play" : "Open"
             onTriggered: provider.open(panel.selected)
+        }
+        Action {
+            objectName: panel.prefix + "PlayNext"
+            text: "Play next"
+            enabled: panel.selected.kind === "song"
+            onTriggered: provider.playNext(panel.selected)
         }
         Action {
             text: "Add to queue"
@@ -507,7 +538,7 @@ Rectangle {
             text: "Open album"
             enabled: !!panel.selected.albumId
             onTriggered: provider.open({
-                source: "provider",
+                source: provider.server.scheme,
                 server: panel.selected.server,
                 kind: "album",
                 remoteId: panel.selected.albumId,
@@ -518,7 +549,7 @@ Rectangle {
             text: "Open artist"
             enabled: !!panel.selected.artistId
             onTriggered: provider.open({
-                source: "provider",
+                source: provider.server.scheme,
                 server: panel.selected.server,
                 kind: "artist",
                 remoteId: panel.selected.artistId,
@@ -528,21 +559,21 @@ Rectangle {
         Action {
             text: "Remove from playlist"
             visible: panel.playlistPage && !!provider.collection.editable
-            height: visible ? 40 : 0
+            height: visible ? 48 : 0
             enabled: !provider.actionBusy
             onTriggered: provider.removeFromPlaylist(panel.selected)
         }
         Action {
             text: "Move up"
             visible: panel.playlistPage && !!provider.collection.editable
-            height: visible ? 40 : 0
+            height: visible ? 48 : 0
             enabled: !provider.actionBusy && panel.selectedIndex > 0
             onTriggered: provider.movePlaylistItem(panel.selectedIndex, panel.selectedIndex - 1)
         }
         Action {
             text: "Move down"
             visible: panel.playlistPage && !!provider.collection.editable
-            height: visible ? 40 : 0
+            height: visible ? 48 : 0
             enabled: !provider.actionBusy && panel.selectedIndex >= 0 && panel.selectedIndex < provider.items.length - 1
             onTriggered: provider.movePlaylistItem(panel.selectedIndex, panel.selectedIndex + 1)
         }
@@ -860,6 +891,7 @@ Rectangle {
     }
     LibraryDialog {
         id: deleteDialog
+        objectName: panel.prefix + "DeleteDialog"
         title: "Delete playlist?"
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAboutToShow: standardButton(Dialog.Ok).text = "Delete"

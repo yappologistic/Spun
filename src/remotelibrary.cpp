@@ -17,6 +17,9 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
       m_api(*m_apiOwner), m_player(directory + "/player.ini", this, true),
       m_directory(directory) {
   m_player.setExternalName(m_api.serviceName());
+  m_prefetchTimer.setSingleShot(true);
+  m_prefetchTimer.setInterval(300);
+  connect(&m_prefetchTimer, &QTimer::timeout, this, &RemoteLibrary::prefetch);
   m_save.setSingleShot(true);
   m_save.setInterval(200);
   connect(&m_save, &QTimer::timeout, this, &RemoteLibrary::persist);
@@ -26,6 +29,11 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
   connect(&m_api, &RemoteMusicApi::accountChanged, this, [this] {
     persist();
     ++m_generation;
+    cancelPrefetch();
+    m_pages.clear();
+    m_pageOrder.clear();
+    m_viewState.clear();
+    emit viewRestored();
     m_player.stop();
     m_player.setExternalTracks({}, 0, false);
     m_audio.reset();
@@ -50,6 +58,22 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
   });
   connect(&m_api, &RemoteMusicApi::changed, this, [this] {
     m_player.setExternalName(m_api.serviceName());
+    if (m_pageFolder != m_api.folder()) {
+      m_pageFolder = m_api.folder();
+      m_pages.clear();
+      m_pageOrder.clear();
+      ++m_generation;
+      m_api.cancel("catalog");
+      m_busy = false;
+      m_items.clear();
+      m_back.clear();
+      m_viewState.clear();
+      emit viewRestored();
+    }
+    if (m_prefetchBitrate != m_api.bitrate()) {
+      cancelPrefetch();
+      m_prefetchTimer.start();
+    }
     if (m_api.connected() && m_identity != m_api.identity()) {
       m_identity = m_api.identity();
       restoreQueue();
@@ -60,19 +84,42 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
   });
   connect(&m_player, &Player::externalRequested, this,
           &RemoteLibrary::loadCurrent);
-  connect(&m_player, &Player::externalCancelled, this,
-          [this] { m_api.cancel("audio"); });
-  connect(&m_player, &Player::trackChanged, this, [this] {
-    report(true);
-    m_audio.reset();
+  connect(&m_player, &Player::externalCancelled, this, [this] {
+    ++m_audioGeneration;
     m_api.cancel("audio");
+    m_buffering = false;
+    emit changed();
+  });
+  connect(&m_player, &Player::trackChanged, this, [this] {
+    if (m_observedKey == m_player.trackKey()) {
+      if (m_player.artwork().isNull())
+        loadArt();
+      m_prefetchTimer.start();
+      emit changed();
+      return;
+    }
+    m_observedKey = m_player.trackKey();
+    report(true);
+    // Queue reordering can emit trackChanged without replacing the playing
+    // song.
+    if (m_audioKey != m_player.trackKey())
+      m_audio.reset();
+    ++m_audioGeneration;
+    m_api.cancel("audio");
+    m_buffering = false;
     loadArt();
     refresh();
     m_save.start();
     emit changed();
   });
-  connect(&m_player, &Player::queueChanged, this, [this] { m_save.start(); });
+  connect(&m_player, &Player::queueChanged, this, [this] {
+    m_save.start();
+    m_prefetchTimer.start();
+  });
+  connect(&m_player, &Player::settingsChanged, this,
+          [this] { m_prefetchTimer.start(); });
   connect(&m_player, &Player::playingChanged, this, [this] {
+    m_prefetchTimer.start();
     report(m_player.playbackState() == QMediaPlayer::StoppedState &&
            !m_player.busy());
   });
@@ -87,7 +134,8 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
   connect(&m_player, &Player::errorChanged, this, [this] {
     if (!m_player.error().isEmpty()) {
       report(true);
-      emit feedback(m_player.error(), true);
+      cancelPrefetch();
+      emit changed();
     }
   });
   m_reportTimer.setInterval(10000);
@@ -95,6 +143,7 @@ RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
   m_reportTimer.start();
 }
 RemoteLibrary::~RemoteLibrary() {
+  cancelPrefetch();
   persist();
   report(true);
   m_player.stop();
@@ -104,6 +153,8 @@ void RemoteLibrary::setEnabled(bool value) {
     return;
   m_enabled = value;
   if (!value) {
+    cancelPrefetch();
+    ++m_generation;
     m_player.pause();
     report(true);
     m_api.cancel("catalog");
@@ -125,11 +176,13 @@ QVariantMap RemoteLibrary::current() const {
   return m_catalog.value(m_player.currentUrl().path().mid(1));
 }
 void RemoteLibrary::show(const QString &mode) {
+  savePage();
   m_back.clear();
   m_collection.clear();
   browse({{"mode", mode}});
 }
 void RemoteLibrary::search(const QString &query, const QString &filter) {
+  savePage();
   m_back.clear();
   m_collection.clear();
   browse({{"mode", "search"},
@@ -143,6 +196,7 @@ void RemoteLibrary::open(const QVariantMap &row) {
     playItem(row);
     return;
   }
+  savePage();
   m_back.append(
       QVariantMap{{"request", m_request}, {"collection", m_collection}});
   if (m_back.size() > 30)
@@ -153,16 +207,38 @@ void RemoteLibrary::open(const QVariantMap &row) {
 void RemoteLibrary::back() {
   if (m_back.isEmpty())
     return;
+  savePage();
   auto state = m_back.takeLast().toMap();
   m_collection = state.value("collection").toMap();
   browse(state.value("request").toMap());
 }
-void RemoteLibrary::reload() { browse(m_request); }
+void RemoteLibrary::reload() { browse(m_request, false, true); }
 void RemoteLibrary::loadMore() {
   if (m_more && !m_busy)
     browse(m_request, true);
 }
-void RemoteLibrary::browse(const QVariantMap &request, bool append) {
+void RemoteLibrary::savePage() {
+  if (m_busy || !m_error.isEmpty() || m_items.isEmpty())
+    return;
+  const auto key = QString::fromUtf8(
+      QJsonDocument::fromVariant(m_request).toJson(QJsonDocument::Compact));
+  m_pages[key] = {{"items", m_items},
+                  {"collection", m_collection},
+                  {"heading", m_heading},
+                  {"more", m_more},
+                  {"view", m_viewState}};
+  m_pageOrder.removeAll(key);
+  m_pageOrder.append(key);
+  qsizetype total = 0;
+  for (const auto &page : m_pages)
+    total += page.value("items").toList().size();
+  while (!m_pageOrder.isEmpty() && (m_pages.size() > 6 || total > 20000)) {
+    auto old = m_pageOrder.takeFirst();
+    total -= m_pages.take(old).value("items").toList().size();
+  }
+}
+void RemoteLibrary::browse(const QVariantMap &request, bool append,
+                           bool refresh) {
   if (!m_api.connected())
     return;
   ++m_generation;
@@ -171,10 +247,33 @@ void RemoteLibrary::browse(const QVariantMap &request, bool append) {
   m_thumbBusy = false;
   m_thumbPending.clear();
   m_thumbActive.clear();
+  m_api.cancel("catalog");
+  const bool same = request == m_request;
   m_request = request;
+  const auto key = QString::fromUtf8(
+      QJsonDocument::fromVariant(request).toJson(QJsonDocument::Compact));
+  if (!append && !refresh && m_pages.contains(key)) {
+    const auto state = m_pages.value(key);
+    m_items = state.value("items").toList();
+    m_collection = state.value("collection").toMap();
+    m_heading = state.value("heading").toString();
+    m_more = state.value("more").toBool();
+    m_viewState = state.value("view").toMap();
+    m_error.clear();
+    m_busy = false;
+    for (const auto &row : m_items)
+      m_catalog[row.toMap().value("id").toString()] = row.toMap();
+    emit changed();
+    emit viewRestored();
+    loadThumbs();
+    return;
+  }
+  if (!append && !refresh)
+    m_viewState = {{"query", request.value("query")},
+                   {"filter", request.value("filter", request.value("mode"))}};
   m_busy = true;
   m_error.clear();
-  if (!append)
+  if (!append && !(refresh && same))
     m_items.clear();
   auto req = request;
   req["offset"] = append ? m_items.size() : 0;
@@ -184,6 +283,7 @@ void RemoteLibrary::browse(const QVariantMap &request, bool append) {
     m_heading = mode == "search" ? request.value("query").toString()
                                  : mode.left(1).toUpper() + mode.mid(1);
   emit changed();
+  emit viewRestored();
   m_api.browse(req, [this, generation, append](const QVariantMap &data,
                                                const QString &error) {
     if (generation != m_generation)
@@ -204,6 +304,8 @@ void RemoteLibrary::browse(const QVariantMap &request, bool append) {
       m_more = data.value("more").toBool();
       if (data.contains("editable"))
         m_collection["editable"] = data.value("editable");
+      if (data.contains("deletable"))
+        m_collection["deletable"] = data.value("deletable");
       if (data.contains("title"))
         m_heading = data.value("title").toString();
       // Retain only displayed rows and queued tracks, not every visited page.
@@ -220,6 +322,7 @@ void RemoteLibrary::browse(const QVariantMap &request, bool append) {
       loadThumbs();
     }
     emit changed();
+    emit viewRestored();
   });
 }
 QList<Track> RemoteLibrary::tracks(const QVariantList &rows) {
@@ -260,6 +363,58 @@ void RemoteLibrary::enqueue(const QVariantMap &row) {
     emit feedback("Added to queue", false);
   }
 }
+void RemoteLibrary::playNext(const QVariantMap &row) {
+  const auto queue = tracks({row});
+  if (queue.isEmpty())
+    return;
+  m_player.insertExternalNext(queue);
+  emit feedback("Playing next", false);
+}
+void RemoteLibrary::retry() {
+  cancelPrefetch();
+  m_audio.reset();
+  m_player.retryExternal();
+}
+void RemoteLibrary::cancelPrefetch() {
+  m_prefetchTimer.stop();
+  ++m_prefetchGeneration;
+  m_api.cancel("prefetch");
+  m_prefetched.reset();
+  m_prefetchKey.clear();
+  m_prefetchReady = false;
+  m_prefetchBitrate = m_api.bitrate();
+}
+void RemoteLibrary::prefetch() {
+  const auto key = m_player.queuedTrackKey(m_player.nextTrackIndex());
+  if (!m_enabled || !m_api.connected() || key.isEmpty()) {
+    cancelPrefetch();
+    return;
+  }
+  if (key == m_prefetchKey && m_prefetchBitrate == m_api.bitrate())
+    return;
+  cancelPrefetch();
+  if (!m_audio || !m_player.playing() || m_buffering)
+    return;
+  const auto row = m_catalog.value(QUrl(key).path().mid(1));
+  if (key.isEmpty() || !m_api.owns(row))
+    return;
+  m_prefetchKey = key;
+  const auto generation = m_prefetchGeneration;
+  auto buffer = std::make_shared<QTemporaryDir>();
+  m_prefetched = buffer;
+  m_api.download(
+      row, buffer->filePath("audio"),
+      [this, buffer, key, generation](const QVariantMap &,
+                                      const QString &error) {
+        if (generation != m_prefetchGeneration || key != m_prefetchKey)
+          return;
+        m_prefetchReady =
+            error.isEmpty() && QFileInfo::exists(buffer->filePath("audio"));
+        if (!m_prefetchReady)
+          m_prefetched.reset();
+      },
+      "prefetch");
+}
 void RemoteLibrary::loadCurrent() {
   const auto row = current();
   const auto key = m_player.trackKey();
@@ -267,21 +422,39 @@ void RemoteLibrary::loadCurrent() {
     m_player.failExternal(key, "Connect to this song's music server first.");
     return;
   }
+  const auto generation = ++m_audioGeneration;
+  if (key == m_prefetchKey && m_prefetchReady &&
+      m_prefetchBitrate == m_api.bitrate()) {
+    m_audio = m_prefetched;
+    m_audioKey = key;
+    cancelPrefetch();
+    m_player.resolveExternal(key,
+                             QUrl::fromLocalFile(m_audio->filePath("audio")));
+    m_prefetchTimer.start();
+    return;
+  }
+  cancelPrefetch();
   auto buffer = std::make_shared<QTemporaryDir>();
-  const auto path = buffer->filePath("audio");
-  m_api.download(
-      row, path,
-      [this, buffer, key](const QVariantMap &, const QString &error) {
-        if (key != m_player.trackKey())
-          return;
-        if (!error.isEmpty()) {
-          m_player.failExternal(key, error);
-          return;
-        }
-        m_audio = buffer;
-        m_player.resolveExternal(
-            key, QUrl::fromLocalFile(buffer->filePath("audio")));
-      });
+  m_buffering = true;
+  emit changed();
+  m_api.download(row, buffer->filePath("audio"),
+                 [this, buffer, key, generation](const QVariantMap &,
+                                                 const QString &error) {
+                   if (generation != m_audioGeneration ||
+                       key != m_player.trackKey())
+                     return;
+                   m_buffering = false;
+                   emit changed();
+                   if (!error.isEmpty()) {
+                     m_player.failExternal(key, error);
+                     return;
+                   }
+                   m_audio = buffer;
+                   m_audioKey = key;
+                   m_player.resolveExternal(
+                       key, QUrl::fromLocalFile(buffer->filePath("audio")));
+                   m_prefetchTimer.start();
+                 });
 }
 void RemoteLibrary::loadArt() {
   m_api.cancel("cover");
@@ -349,6 +522,8 @@ void RemoteLibrary::loadThumbs() {
   }
 }
 void RemoteLibrary::finishAction(const QString &error, bool refreshPage) {
+  m_pages.clear();
+  m_pageOrder.clear();
   m_actionBusy = false;
   if (!error.isEmpty())
     emit feedback(error, true);

@@ -19,8 +19,10 @@ namespace {
 bool until(const std::function<bool()> &fn, int timeout = 15000) {
   QElapsedTimer t;
   t.start();
-  while (!fn() && t.elapsed() < timeout)
+  do {
+    if (fn()) return true;
     QTest::qWait(20);
+  } while (t.elapsed() < timeout);
   return fn();
 }
 QQuickItem *find(QQuickItem *item, const QString &name) {
@@ -188,6 +190,15 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
   check(until([&] { return !jf.busy(); }) && jf.items().size() == 105 &&
             !jf.more(),
         "search pagination returns all 105 songs");
+  QTest::qWait(100);
+  auto *results = find(window->contentItem(), "subsonicResults");
+  results->setProperty("contentY", 700);
+  QMetaObject::invokeMethod(find(window->contentItem(), "subsonicPanel"), "saveView");
+  click("localSourceButton");
+  click("subsonicSourceButton");
+  check(until([&] { auto *view = find(window->contentItem(), "subsonicResults"); return view && qAbs(view->property("contentY").toReal()-700) < 2; }), "source switch restores library scroll position");
+  auto *searchField = find(window->contentItem(), "subsonicSearch");
+  check(searchField && searchField->property("text").toString() == "Fixture", "source switch restores search query");
   QSet<QString> ids;
   for (const auto &v : jf.items())
     ids.insert(v.toMap().value("id").toString());
@@ -303,6 +314,13 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
   check(until([&] { return !jf.actionBusy() && !jf.busy(); }) &&
             jf.heading() == "Renamed fixture",
         "playlist renamed on server");
+  check(jf.collection().value("deletable").toBool(), "owner can delete playlist from shared controller");
+  click("subsonicPageActions");
+  auto *deleteAction = find(window->contentItem(), "subsonicDeletePlaylist");
+  check(deleteAction && deleteAction->isVisible() && deleteAction->height() >= 48,
+        "owner delete action visible with Material touch target");
+  capture("subsonic-playlist-menu");
+  QMetaObject::invokeMethod(find(window->contentItem(), "subsonicPanel"), "closeActions");
   capture("subsonic-playlist");
   for (const auto &song : QVariantList{first, second, third}) {
     jf.playItem(song.toMap());
@@ -379,7 +397,29 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
         "Jellyfin and Subsonic remain separate sources");
   click("subsonicSourceButton");
   check(player->count() == 2, "Subsonic queue survives source switching");
+  const auto beforeNextKey = player->trackKey();
+  auto *panel = find(window->contentItem(), "subsonicPanel");
+  QMetaObject::invokeMethod(panel, "menuFor", Q_ARG(QVariant, QVariant(first)), Q_ARG(QVariant, QVariant(-1)), Q_ARG(QVariant, QVariant()));
+  check(until([&] { auto *action = find(window->contentItem(), "subsonicPlayNext"); return action && action->isVisible(); }), "Play next is available in remote song menu");
+  capture("subsonic-play-next-menu");
+  click("subsonicPlayNext");
+  check(player->count() == 3 && player->trackKey() == beforeNextKey && player->queue()[player->currentIndex()+1].toMap().value("title") == first.value("title"), "Play next inserts without restarting current song");
+  player->remove(player->currentIndex()+1);
+  player->failExternal(player->trackKey(), "Connection interrupted. Retry this song.");
+  check(until([&] { auto *retry = find(window->contentItem(), "remotePlaybackRetry"); return retry && retry->isVisible(); }), "failed remote playback exposes inline Retry");
+  capture("subsonic-retry");
+  click("remotePlaybackRetry");
+  check(player->trackKey() == beforeNextKey && player->count() == 2 && until([&] { return player->position() > 200 && player->error().isEmpty(); }), "Retry reloads same song and preserves queue");
+  player->pause();
   window->setProperty("libraryOpen", false);
+  window->setProperty("immersive", true);
+  window->setProperty("discFlipped", true);
+  window->setProperty("lyricsView", true);
+  check(until([&] { return !jf.loading() && jf.lines().size() == 3; }), "immersive lyrics use the current server timeline");
+  QTest::qWait(200);
+  capture("subsonic-immersive-lyrics");
+  window->setProperty("discFlipped", false);
+  window->setProperty("immersive", false);
   local.setShowPlayerBody(true);
   for (const auto &medium : QStringList{"cd", "vinyl", "cassette", "tp7"}) {
     local.setMedium(medium);
@@ -394,6 +434,12 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
             "3D medium activates");
       QTest::qWait(500);
       capture("subsonic-" + medium + "-3d");
+      window->setProperty("immersive", true);
+      window->setProperty("chromeIdle", true);
+      QTest::qWait(300);
+      check(window->property("chromeHidden").toBool() && window->property("threeDActive").toBool(), "immersive mode retains active 3D medium");
+      capture("subsonic-immersive-" + medium + "-3d");
+      window->setProperty("immersive", false);
       player->seek(2000);
       click("playButton");
       check(until([&] { return player->position() > 2200; }) &&
@@ -434,6 +480,12 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
               !jf.collection().value("editable").toBool() &&
               jf.items().size() == 1,
           "read-only playlist displays tracks without edit permission");
+    check(!jf.collection().value("deletable").toBool(), "reader has no playlist delete permission");
+    window->setProperty("libraryOpen", true);
+    click("subsonicPageActions");
+    auto *removeAction = find(window->contentItem(), "subsonicDeletePlaylist");
+    check(!removeAction || !removeAction->isVisible(), "read-only playlist hides Delete action");
+    QMetaObject::invokeMethod(find(window->contentItem(), "subsonicPanel"), "closeActions");
     jf.removeFromPlaylist(jf.items().value(0).toMap());
     check(!jf.actionBusy() && jf.items().size() == 1,
           "read-only playlist removal blocked locally");
@@ -450,7 +502,13 @@ int exerciseSubsonic(Player &local, RemoteLibrary &jf, QQuickWindow *window,
   api->connectServer(base, user, password, false);
   check(until([&] { return api->connected() && !api->playlists().isEmpty(); }),
         "owner account reconnects after permission checks");
-  jf.deletePlaylist(playlistId);
+  jf.open(api->playlists().first().toMap());
+  check(until([&] { return !jf.busy(); }), "owner playlist opens for deletion");
+  window->setProperty("libraryOpen", true);
+  click("subsonicPageActions");
+  click("subsonicDeletePlaylist");
+  capture("subsonic-delete-confirmation");
+  click("subsonicDeleteDialogAccept");
   check(until([&] { return !jf.actionBusy() && api->playlists().isEmpty(); }),
         "playlist deleted on server");
   api->setBitrate(128);

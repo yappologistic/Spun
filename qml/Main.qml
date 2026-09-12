@@ -7,6 +7,42 @@ ApplicationWindow {
     id: root
     objectName: "spunWindow"
     title: "Spun"
+    property bool immersive: false
+    property bool chromeIdle: false
+    property bool immersionQueue: false
+    property bool immersionLibrary: false
+    readonly property bool chromeHidden: immersive && chromeIdle && !menuOpen && !sideOpen && !deckPlayer.error.length && !(useServer && serverLibrary.buffering)
+    function revealChrome() { chromeIdle = false; if (immersive) immersionIdle.restart() }
+    function toggleImmersion() { immersive = !immersive }
+    onImmersiveChanged: {
+        if (immersive) {
+            immersionQueue = queueOpen; immersionLibrary = libraryOpen;
+            queueOpen = false; libraryOpen = false; player.miniMode = false;
+        } else { queueOpen = immersionQueue; libraryOpen = immersionLibrary }
+        revealChrome(); Qt.callLater(updateMask);
+    }
+    onActiveFocusItemChanged: revealChrome()
+    Timer {
+        id: immersionIdle; objectName: "immersionIdle"
+        interval: 3000
+        onTriggered: {
+            const focused = root.activeFocusItem && root.activeFocusItem.visualFocus;
+            if (root.immersive && !root.menuOpen && !root.editingText && !focused && !root.threeDGesture && !root.threeDHardwarePressed)
+                root.chromeIdle = true;
+            else if (root.immersive) restart();
+        }
+    }
+    HoverHandler {
+        parent: root.contentItem
+        property point previousPosition: Qt.point(-1, -1)
+        onPointChanged: {
+            const position = point.position;
+            if (position.x !== previousPosition.x || position.y !== previousPosition.y) {
+                previousPosition = position;
+                root.revealChrome();
+            }
+        }
+    }
     visible: true
     readonly property bool wideMixer: tx6Visible && threeDRequested
     readonly property real playerWidth: miniMode ? 300 : wideMixer ? 740 : 530
@@ -127,6 +163,7 @@ ApplicationWindow {
         running: root.useCider && root.visible && root.visibility !== Window.Minimized && (songMenu.visible || crossfadeMenu.visible || qualityPopup.visible)
         onTriggered: root.refreshOpenCiderDetails()
     }
+    readonly property bool playbackFailed: useServer && deckPlayer.error.length > 0
     property var deckPlayer: useCider ? root.ciderService : useServer ? serverLibrary.transport : useYoutube ? youtube.transport : player
     onDeckPlayerChanged: tx6.setPlayer(useServer ? serverLibrary.transport : useYoutube ? youtube.transport : player)
     readonly property string cassetteTrackIdentity: (useCider ? "cider:" : useServer ? (useSubsonic ? "subsonic:" : "jellyfin:") : useYoutube ? "youtube:" : "local:") + (deckPlayer.trackKey || "")
@@ -254,7 +291,7 @@ ApplicationWindow {
     property bool miniMode: player.miniMode
     onMiniModeChanged: Qt.callLater(function() {
         cancelSeekPreview(); scrubber.cancelScrub(); stopSwap()
-        if (miniMode) { artworkPopup.close(); savedQueuePicker.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); songMenu.close(); musicBrowser.closeActions(); libraryOpen = false; queueOpen = false; helpOpen = false; menu.close(); miniReveal.restart() }
+        if (miniMode) { immersive = false; artworkPopup.close(); savedQueuePicker.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); songMenu.close(); musicBrowser.closeActions(); libraryOpen = false; queueOpen = false; helpOpen = false; menu.close(); miniReveal.restart() }
         updateMask(); platformNative.effects(root, backgroundBlur)
     })
     property bool editingText: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
@@ -539,28 +576,29 @@ ApplicationWindow {
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
     }
 
-    Shortcut { sequence: "Alt+G"; enabled: actionNotice.shown && actionNotice.canUndo && !root.menuOpen; onActivated: noticeUndo.forceActiveFocus(Qt.ShortcutFocusReason) }
-    Shortcut { sequence: "Ctrl+K"; enabled: !root.menuOpen || quickJump.visible; onActivated: quickJump.visible ? quickJump.close() : root.openQuickJump() }
-    Shortcut { sequence: "Space"; enabled: !(root.activeFocusItem instanceof AbstractButton) && !(root.useCider && root.queueOpen && trackList.activeFocus) && !(root.libraryOpen && musicBrowser.item && musicBrowser.item.trackListFocused) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useServer) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() }
-    Shortcut { sequence: "Ctrl+V"; enabled: !root.editingText && !root.menuOpen; onActivated: root.openMusicLink("", true) }
-    Shortcut { sequence: "Ctrl+O"; enabled: !root.menuOpen; onActivated: files.open() }
-    Shortcut { sequence: "Ctrl+Shift+O"; enabled: !root.menuOpen; onActivated: folder.open() }
-    Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-    Shortcut { sequence: "Ctrl+F"; enabled: !root.menuOpen; onActivated: root.libraryOpen ? (root.useServer ? serverBrowser.item.focusSearch() : root.useYoutube ? youtubeBrowser.item.focusSearch() : musicBrowser.focusSearch()) : root.openQueueSearch() }
-    Shortcut { sequence: "Ctrl+B"; enabled: (root.useCider || root.useYoutube || root.useServer) && !root.menuOpen; onActivated: root.openLibrary() }
-    Shortcut { sequence: "Ctrl+L"; enabled: !root.menuOpen; onActivated: root.toggleQueue() }
-    Shortcut { sequence: "Ctrl+M"; enabled: !root.menuOpen; onActivated: player.miniMode = !player.miniMode }
-    Shortcut { sequence: "Right"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.seek(root.deckPlayer.position + 5000) }
-    Shortcut { sequence: "Left"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.seek(root.deckPlayer.position - 5000) }
-    Shortcut { sequence: "Ctrl+Right"; enabled: !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.next() }
-    Shortcut { sequence: "Ctrl+Left"; enabled: !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.previous() }
-    Shortcut { sequence: "Up"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
-    Shortcut { sequence: "Down"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
-    Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: root.toggleMute() }
-    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer || root.threeDHardwarePressed) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (serverBrowser.item && serverBrowser.item.actionsOpen) { serverBrowser.item.closeActions(); return }; if (youtubeBrowser.item && youtubeBrowser.item.actionsOpen) { youtubeBrowser.item.closeActions(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if(root.useYoutube || root.useServer){root.libraryOpen=false;return}; if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
-    Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
-    Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: root.flipDisc() }
-    Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: root.helpOpen = !root.helpOpen }
+    Shortcut { sequence: "Alt+G"; enabled: actionNotice.shown && actionNotice.canUndo && !root.menuOpen; onActivated: { root.revealChrome(); noticeUndo.forceActiveFocus(Qt.ShortcutFocusReason) } }
+    Shortcut { sequence: "Ctrl+K"; enabled: !root.menuOpen || quickJump.visible; onActivated: { root.revealChrome(); quickJump.visible ? quickJump.close() : root.openQuickJump() } }
+    Shortcut { sequence: "Space"; enabled: !(root.activeFocusItem instanceof AbstractButton) && !(root.useCider && root.queueOpen && trackList.activeFocus) && !(root.libraryOpen && musicBrowser.item && musicBrowser.item.trackListFocused) && !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useServer) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() } }
+    Shortcut { sequence: "Ctrl+V"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.openMusicLink("", true) } }
+    Shortcut { sequence: "Ctrl+O"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); files.open() } }
+    Shortcut { sequence: "Ctrl+Shift+O"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); folder.open() } }
+    Shortcut { sequence: "Ctrl+Q"; onActivated: { root.revealChrome(); Qt.quit() } }
+    Shortcut { sequence: "Ctrl+F"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); root.libraryOpen ? (root.useServer ? serverBrowser.item.focusSearch() : root.useYoutube ? youtubeBrowser.item.focusSearch() : musicBrowser.focusSearch()) : root.openQueueSearch() } }
+    Shortcut { sequence: "Ctrl+B"; enabled: (root.useCider || root.useYoutube || root.useServer) && !root.menuOpen; onActivated: { root.revealChrome(); root.openLibrary() } }
+    Shortcut { sequence: "Ctrl+L"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); root.toggleQueue() } }
+    Shortcut { sequence: "Ctrl+I"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); root.toggleImmersion() } }
+    Shortcut { sequence: "Ctrl+M"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); player.miniMode = !player.miniMode } }
+    Shortcut { sequence: "Right"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.deckPlayer.seek(root.deckPlayer.position + 5000) } }
+    Shortcut { sequence: "Left"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.deckPlayer.seek(root.deckPlayer.position - 5000) } }
+    Shortcut { sequence: "Ctrl+Right"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.deckPlayer.next() } }
+    Shortcut { sequence: "Ctrl+Left"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.deckPlayer.previous() } }
+    Shortcut { sequence: "Up"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: { root.revealChrome(); root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) } }
+    Shortcut { sequence: "Down"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: { root.revealChrome(); root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) } }
+    Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.toggleMute() } }
+    Shortcut { sequence: "Escape"; onActivated: { root.revealChrome(); if(root.threeDPointer || root.threeDHardwarePressed) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (serverBrowser.item && serverBrowser.item.actionsOpen) { serverBrowser.item.closeActions(); return }; if (youtubeBrowser.item && youtubeBrowser.item.actionsOpen) { youtubeBrowser.item.closeActions(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if(root.useYoutube || root.useServer){root.libraryOpen=false;return}; if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.immersive) { root.immersive = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
+    Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
+    Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: { root.revealChrome(); root.flipDisc() } }
+    Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: { root.revealChrome(); root.helpOpen = !root.helpOpen } }
 
     FileDialog {
         id: files
@@ -612,6 +650,8 @@ ApplicationWindow {
     Rectangle {
         id: badge
         objectName: "sourceBar"
+        opacity: root.chromeHidden ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         visible: !root.miniMode
         x: (root.playerWidth - width) / 2; y: 13; width: platformNative.hyprland ? 504 : 512; height: 48; radius: 24
         readonly property real tabWidth: platformNative.hyprland ? 80 : 64
@@ -1008,7 +1048,7 @@ ApplicationWindow {
                             width: lyricList.width-10; x: 5
                             text: modelData.text; textFormat: Text.PlainText
                             wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
-                            font.pixelSize: root.miniMode ? 19 : 15
+                            font.pixelSize: root.immersive ? 22 : root.miniMode ? 19 : 15
                             color: (seekable && lyricList.hoveredLine === lyricLine) || (root.lyricService.timed && index === root.lyricService.currentIndex) ? root.accent : root.ink
                             opacity: root.lyricService.timed && index !== root.lyricService.currentIndex && !(seekable && lyricList.hoveredLine === lyricLine) ? .62 : 1
                             Behavior on color { ColorAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
@@ -1327,6 +1367,8 @@ ApplicationWindow {
     Button {
         id: mixerToggle
         objectName: "tx6Toggle"
+        opacity: root.chromeHidden ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         // The visible pill keeps its position; the surrounding target is 48 px.
         x: root.playerWidth - 102; y: 73; width: 74; height: 48
         hoverEnabled: true; focusPolicy: Qt.StrongFocus
@@ -1342,7 +1384,7 @@ ApplicationWindow {
             border.color: mixerToggle.visualFocus ? root.accent : Qt.alpha(root.mutedInk,.25)
             SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; hovered: mixerToggle.hovered; pressed: mixerToggle.down; focused: mixerToggle.visualFocus }
         }
-        SpunToolTip { visible: mixerToggle.hovered; text: mixerToggle.checked ? "Hide TX-6 mixer" : "Show TX-6 mixer" }
+        SpunToolTip { visible: mixerToggle.hovered && !root.chromeHidden; text: mixerToggle.checked ? "Hide TX-6 mixer" : "Show TX-6 mixer" }
         contentItem: SpunText { text: parent.text; color: parent.checked?root.accent:root.mutedInk; font.pixelSize:12; horizontalAlignment:Text.AlignHCenter; verticalAlignment:Text.AlignVCenter }
     }
     DropArea {
@@ -1392,6 +1434,8 @@ ApplicationWindow {
     Rectangle {
         id: deck
         objectName: "playerDeck"
+        opacity: root.chromeHidden ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: SpunStyle.feedback; easing.type: Easing.BezierSpline; easing.bezierCurve: SpunStyle.effectsCurve } }
         visible: !root.miniMode
         x: (root.playerWidth - width) / 2; y: 533 + root.mixerHeightExtra; width: 406; height: 144 + (root.showHorizontalSeek ? 28 : 0); radius: SpunStyle.panelRadius
         color: root.surface; border.width: 0
@@ -1412,12 +1456,13 @@ ApplicationWindow {
         AbstractButton {
             id: playerArtist
             objectName: "playerArtistLink"
-            x: 24; y: 44; width: 284; height: 28
-            enabled: (root.useCider || root.useYoutube || root.useServer) && root.deckPlayer.artist.length > 0; hoverEnabled: true
+            x: 24; y: 44; width: root.playbackFailed ? 268 : 284; height: 28
+            enabled: !root.playbackFailed && (root.useCider || root.useYoutube || root.useServer) && root.deckPlayer.artist.length > 0; hoverEnabled: true
             Accessible.name: "View artist " + root.deckPlayer.artist
             background: null
             onClicked: root.openArtistName(root.deckPlayer.artist)
-            contentItem: SpunText { text: root.deckPlayer.artist; color: playerArtist.hovered || playerArtist.visualFocus ? root.accent : root.mutedInk; elide: Text.ElideRight; font.pixelSize: SpunStyle.body; verticalAlignment: Text.AlignVCenter; font.underline: playerArtist.hovered || playerArtist.visualFocus }
+            Accessible.description: root.playbackFailed ? root.deckPlayer.error : ""
+            contentItem: SpunText { text: root.playbackFailed ? root.deckPlayer.error : root.deckPlayer.artist; color: root.playbackFailed ? theme.colors.error : playerArtist.hovered || playerArtist.visualFocus ? root.accent : root.mutedInk; elide: Text.ElideRight; font.pixelSize: SpunStyle.body; verticalAlignment: Text.AlignVCenter; font.underline: playerArtist.hovered || playerArtist.visualFocus }
         }
         SpunText {
             objectName: "elapsedTime"
@@ -1426,6 +1471,20 @@ ApplicationWindow {
             width: 77; horizontalAlignment: Text.AlignRight
             text: root.time(root.deckPlayer.position); color: root.mutedInk
             font.pixelSize: 13
+        }
+        SpunButton {
+            objectName: "remotePlaybackRetry"
+            x: 306; y: 36; width: 84; height: 48
+            text: "Retry"; visible: root.playbackFailed
+            Accessible.description: root.deckPlayer.error
+            enabled: !root.serverLibrary.buffering
+            onClicked: root.serverLibrary.retry()
+        }
+        SpunLoading {
+            objectName: "remotePlaybackLoading"
+            x: 24; y: 70; width: 358; height: 8
+            visible: root.useServer && root.serverLibrary.buffering
+            label: "Loading song"
         }
         SeekSlider {
             app: root; objectName: "horizontalSeek"
@@ -2141,6 +2200,7 @@ ApplicationWindow {
         SettingsGap {}
         SettingsAction { objectName: "quickJumpAction"; text: "Quick jump"; hint: "Ctrl+K"; glyphName: "search"; onTriggered: root.openQuickJump() }
         SettingsAction { objectName: "flipDiscAction"; text: root.discFlipped ? "Show artwork" : "Flip disc"; glyphName: "flip"; hint: "F"; enabled: root.deckPlayer.count > 0; onTriggered: root.flipDisc() }
+        SettingsAction { objectName: "immersionToggle"; text: "Immersive mode"; hint: "Ctrl+I"; glyphName: "artwork"; height: 48; checkable: true; checked: root.immersive; onTriggered: root.toggleImmersion() }
         SettingsAction { objectName: "miniToggle"; text: "Mini mode"; glyphName: "mini"; checkable: true; checked: player.miniMode; onTriggered: player.miniMode = !player.miniMode }
         SettingsAction { objectName: "preferencesAction"; text: "Preferences"; glyphName: "settings"; onTriggered: Qt.callLater(function() { preferences.open() }) }
         SettingsAction { text: "Play demo"; glyphName: "play"; onTriggered: { root.useLocal(); player.demo() } }
@@ -2433,7 +2493,7 @@ ApplicationWindow {
     }
 
     Rectangle {
-        visible: root.deckPlayer.error.length > 0
+        visible: !root.useServer && root.deckPlayer.error.length > 0
         x: 73; y: 419; width: 384; height: Math.max(78, errorText.implicitHeight+28); radius: 14
         color: root.surface; border.color: theme.colors.error
         SpunText { id: errorText; x: 14; y: 14; width: 310; text: root.deckPlayer.error; color: root.ink; font.pixelSize: SpunStyle.caption; wrapMode: Text.WordWrap }
@@ -2481,7 +2541,7 @@ ApplicationWindow {
                             ["Ctrl + M", "Mini / full player"], ["Ctrl + B", "Browse Cider music"],
                             ["Ctrl + V", "Open music link"], ["F", "Flip disc"], ["Y", "Lyrics / album tracks"],
                             ["Ctrl / Shift + click", "Select tracks"], ["Ctrl + A / Space", "Select all / toggle*"],
-                            ["Alt + G", "Focus Undo notice"], ["Esc", "Back / close"], ["F1", "Keyboard shortcuts"]
+                            ["Ctrl + I", "Immersive mode"], ["Alt + G", "Focus Undo notice"], ["Esc", "Back / close"], ["F1", "Keyboard shortcuts"]
                         ]
                         Item {
                             required property var modelData

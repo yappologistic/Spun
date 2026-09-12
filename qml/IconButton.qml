@@ -5,7 +5,7 @@ AbstractButton {
     id: control
     property string glyphName: "play"
     property string tip: ""
-    property bool showTip: true
+    property bool showTip: !Window.window || Window.window["chromeHidden"] !== true
     property color ink: "#eee8de"
     property color fill: "transparent"
     property color hoverFill: "#30ffffff"

@@ -851,7 +851,8 @@ static int exercise(Player &player, Theme &theme, Lyrics &lyrics, QQuickWindow *
         for(auto *child:item->childItems())collectHelp(child);
     };
     collectHelp(window->contentItem());
-    bool aligned=helpKeys.size()==21&&helpActions.size()==21;
+    bool aligned=!helpKeys.isEmpty()&&helpKeys.size()==helpActions.size();
+    check(std::any_of(helpActions.cbegin(), helpActions.cend(), [](QQuickItem *item) { return item->property("text").toString() == "Immersive mode"; }), "shortcut help includes immersive mode");
     for(int i=0;i<helpKeys.size()&&i<helpActions.size();++i)
         aligned &= helpKeys[i]->x()==helpKeys[0]->x()&&helpActions[i]->x()==helpActions[0]->x()
             &&helpKeys[i]->width()+12<=helpActions[i]->x()+.01;
