@@ -1,4 +1,5 @@
 #pragma once
+#include "remotemusicapi.h"
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -9,20 +10,12 @@
 #include <functional>
 // Jellyfin credentials stay in request headers; persisted rows contain only
 // opaque identities.
-class JellyfinApi : public QObject {
+class JellyfinApi : public RemoteMusicApi {
   Q_OBJECT
-  Q_PROPERTY(bool connected READ connected NOTIFY changed)
-  Q_PROPERTY(bool connecting READ connecting NOTIFY changed)
-  Q_PROPERTY(QString address READ address NOTIFY changed)
-  Q_PROPERTY(QString username READ username NOTIFY changed)
-  Q_PROPERTY(QString error READ error NOTIFY changed)
-  Q_PROPERTY(QVariantList playlists READ playlists NOTIFY changed)
-  Q_PROPERTY(QVariantList folders READ folders NOTIFY changed)
-  Q_PROPERTY(QString folder READ folder WRITE setFolder NOTIFY changed)
-  Q_PROPERTY(bool scrobbling READ scrobbling WRITE setScrobbling NOTIFY changed)
-  Q_PROPERTY(int bitrate READ bitrate WRITE setBitrate NOTIFY changed)
-  Q_PROPERTY(bool keyringAvailable READ keyringAvailable CONSTANT)
 public:
+  QString serviceName() const override { return "Jellyfin"; }
+  QString scheme() const override { return "jellyfin"; }
+  QUrl shareUrl(const QVariantMap &) const override;
   using Reply = std::function<void(const QVariantMap &, const QString &)>;
   using Params = QList<QPair<QString, QString>>;
   explicit JellyfinApi(bool restore = true, const QString &settingsPath = {});
@@ -71,10 +64,6 @@ public:
   QNetworkRequest artworkRequest(const QUrl &) const;
   void reportPlayback(const QVariantMap &, qint64, bool, bool);
 
-signals:
-  void changed();
-  void accountChanged();
-  void message(const QString &text);
 
 private:
   void secret(const QStringList &, const QByteArray &,

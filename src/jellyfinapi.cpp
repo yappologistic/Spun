@@ -1092,3 +1092,10 @@ void JellyfinApi::movePlaylistItem(const QString &playlist,
            QString::number(index),
        {}, "POST", {}, cb);
 }
+
+QUrl JellyfinApi::shareUrl(const QVariantMap &row) const {
+  if (!owns(row)) return {};
+  QUrl u(address() + "/web/index.html");
+  u.setFragment("/details?id=" + QString::fromLatin1(QUrl::toPercentEncoding(row.value("remoteId").toString())));
+  return u;
+}

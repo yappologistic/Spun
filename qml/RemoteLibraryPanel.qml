@@ -4,9 +4,12 @@ import QtQml.Models
 
 Rectangle {
     id: panel
-    objectName: "jellyfinPanel"
+    objectName: panel.prefix + "Panel"
+    required property var provider
+    readonly property string prefix: provider.server.scheme
+    readonly property string serviceLabel: prefix === "subsonic" ? "Navidrome / Subsonic" : provider.server.serviceName
     required property var app
-    readonly property var server: jellyfin.server
+    readonly property var server: provider.server
     property string searchFilter: "albums"
     property var selected: ({})
     property int selectedIndex: -1
@@ -14,10 +17,15 @@ Rectangle {
     property int revision: 0
     property int artworkRevision: 0
     readonly property bool actionsOpen: actions.visible || pageActions.visible || connection.visible || nameDialog.visible || playlistPicker.visible || deleteDialog.visible || folderMenu.visible || qualityMenu.visible
-    readonly property bool playlistPage: jellyfin.page === "playlist"
-    readonly property string selectedPage: jellyfin.page === "album" ? "albums" : jellyfin.page === "artist" ? "artists" : playlistPage ? "playlists" : jellyfin.page
+    readonly property bool playlistPage: provider.page === "playlist"
+    readonly property string selectedPage: provider.page === "album" ? "albums" : provider.page === "artist" ? "artists" : playlistPage ? "playlists" : provider.page
+    onSelectedPageChanged: {
+        if (["albums", "artists", "songs", "playlists"].includes(selectedPage))
+            searchFilter = selectedPage;
+    }
     color: app.surface
     radius: SpunStyle.panelRadius
+    onProviderChanged: { closeActions(); search.text = ""; selected = ({}); selectedIndex = -1; searchFilter = "albums" }
     function closeActions() {
         actions.close();
         pageActions.close();
@@ -69,7 +77,7 @@ Rectangle {
         }
     }
     Connections {
-        target: jellyfin
+        target: provider
         function onChanged() {
             panel.revision++;
         }
@@ -107,14 +115,14 @@ Rectangle {
             tabItems.itemAt(Math.max(0, Math.min(tabItems.count - 1, i))).forceActiveFocus(Qt.TabFocusReason);
         }
         Accessible.role: Accessible.PageTabList
-        Accessible.name: "Jellyfin library"
+        Accessible.name: "Jellyfin library".replace("Jellyfin", panel.serviceLabel)
         Repeater {
             id: tabItems
             model: ["albums", "artists", "songs", "playlists"]
             SpunChoiceButton {
                 required property string modelData
                 required property int index
-                objectName: "jellyfinTab_" + modelData
+                objectName: panel.prefix + "Tab_" + modelData
                 width: (panel.width - 24) / 4
                 text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
                 ink: panel.app.ink
@@ -145,7 +153,7 @@ Rectangle {
                 onClicked: {
                     panel.searchFilter = modelData;
                     search.text = "";
-                    jellyfin.show(modelData);
+                    provider.show(modelData);
                 }
             }
         }
@@ -154,13 +162,13 @@ Rectangle {
         visible: !server.connected
         x: 24
         y: 24
-        text: "Jellyfin"
+        text: "Jellyfin".replace("Jellyfin", panel.serviceLabel)
         font.pixelSize: SpunStyle.title
         color: panel.app.ink
     }
     SpunSearchField {
         id: search
-        objectName: "jellyfinSearch"
+        objectName: panel.prefix + "Search"
         app: panel.app
         visible: server.connected
         x: 16
@@ -169,7 +177,7 @@ Rectangle {
         height: 44
         maximumLength: 512
         placeholderText: "Search " + panel.searchFilter
-        onAccepted: jellyfin.search(text, panel.searchFilter)
+        onAccepted: provider.search(text, panel.searchFilter)
         Keys.onDownPressed: {
             list.forceActiveFocus();
             if (list.count)
@@ -183,8 +191,8 @@ Rectangle {
         glyphName: "back"
         tip: "Back"
         ink: panel.app.ink
-        enabled: jellyfin.canBack
-        onClicked: jellyfin.back()
+        enabled: provider.canBack
+        onClicked: provider.back()
     }
     SpunText {
         visible: server.connected
@@ -193,14 +201,14 @@ Rectangle {
         width: parent.width - 104
         height: 28
         verticalAlignment: Text.AlignVCenter
-        text: jellyfin.heading
+        text: provider.heading
         font.pixelSize: SpunStyle.body
         font.weight: Font.Medium
         color: panel.app.ink
         elide: Text.ElideRight
     }
     IconButton {
-        objectName: "jellyfinPageActions"
+        objectName: panel.prefix + "PageActions"
         x: parent.width - 48
         y: server.connected ? 114 : 16
         glyphName: "more"
@@ -223,7 +231,7 @@ Rectangle {
         }
         SpunButton {
             id: connectButton
-            objectName: "jellyfinConnect"
+            objectName: panel.prefix + "Connect"
             text: server.connecting ? "Connecting…" : "Connect"
             enabled: !server.connecting
             tonal: true
@@ -232,39 +240,39 @@ Rectangle {
         SpunLoading {
             width: parent.width
             visible: server.connecting
-            label: "Connecting to Jellyfin"
+            label: "Connecting to Jellyfin".replace("Jellyfin", panel.serviceLabel)
         }
     }
     SpunLoading {
-        objectName: "jellyfinLoading"
+        objectName: panel.prefix + "Loading"
         x: 24
         y: 160
         width: parent.width - 48
-        visible: server.connected && jellyfin.busy
+        visible: server.connected && provider.busy
         label: "Loading music"
     }
     ListView {
         id: list
-        objectName: "jellyfinResults"
+        objectName: panel.prefix + "Results"
         x: 8
         y: 164
         width: parent.width - 16
         height: parent.height - y - 56
-        visible: server.connected && !jellyfin.error.length
-        model: jellyfin.items
+        visible: server.connected && !provider.error.length
+        model: provider.items
         clip: true
         spacing: 2
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
         Keys.onReturnPressed: if (currentIndex >= 0)
-            jellyfin.open(jellyfin.items[currentIndex])
+            provider.open(provider.items[currentIndex])
         Keys.onEnterPressed: if (currentIndex >= 0)
-            jellyfin.open(jellyfin.items[currentIndex])
+            provider.open(provider.items[currentIndex])
         delegate: ItemDelegate {
             id: row
             required property var modelData
             required property int index
-            objectName: "jellyfinResult_" + index
+            objectName: panel.prefix + "Result_" + index
             width: list.width
             height: 68
             focusPolicy: Qt.StrongFocus
@@ -286,7 +294,7 @@ Rectangle {
             }
             onClicked: {
                 list.currentIndex = index;
-                jellyfin.open(modelData);
+                provider.open(modelData);
             }
             Image {
                 x: 8
@@ -295,7 +303,7 @@ Rectangle {
                 height: 44
                 source: {
                     panel.artworkRevision;
-                    return jellyfin.artwork(row.modelData.id || "");
+                    return provider.artwork(row.modelData.id || "");
                 }
                 sourceSize: Qt.size(88, 88)
                 asynchronous: true
@@ -333,7 +341,7 @@ Rectangle {
                 elide: Text.ElideRight
             }
             IconButton {
-                objectName: "jellyfinRowMenu_" + row.index
+                objectName: panel.prefix + "RowMenu_" + row.index
                 x: parent.width - 44
                 y: 12
                 glyphName: "more"
@@ -348,28 +356,28 @@ Rectangle {
         y: 210
         width: parent.width - 48
         spacing: 12
-        visible: server.connected && !jellyfin.busy && (!!jellyfin.error.length || !jellyfin.items.length)
+        visible: server.connected && !provider.busy && (!!provider.error.length || !provider.items.length)
         SpunText {
             width: parent.width
-            text: jellyfin.error || "No results"
+            text: provider.error || "No results"
             wrapMode: Text.WordWrap
-            color: jellyfin.error.length ? theme.colors.error : panel.app.mutedInk
+            color: provider.error.length ? theme.colors.error : panel.app.mutedInk
             font.pixelSize: SpunStyle.body
         }
         SpunButton {
             text: "Retry"
-            visible: !!jellyfin.error.length
-            onClicked: jellyfin.reload()
+            visible: !!provider.error.length
+            onClicked: provider.reload()
         }
     }
     SpunButton {
-        objectName: "jellyfinMore"
-        visible: server.connected && jellyfin.more
-        enabled: !jellyfin.busy
+        objectName: panel.prefix + "More"
+        visible: server.connected && provider.more
+        enabled: !provider.busy
         anchors.horizontalCenter: parent.horizontalCenter
         y: parent.height - 48
-        text: jellyfin.busy ? "Loading…" : "Load more"
-        onClicked: jellyfin.loadMore()
+        text: provider.busy ? "Loading…" : "Load more"
+        onClicked: provider.loadMore()
     }
     component Action: MenuItem {
         id: action
@@ -417,24 +425,24 @@ Rectangle {
     PopupMenu {
         id: pageActions
         Action {
-            text: jellyfin.more ? "Play listed songs" : "Play songs"
-            enabled: !jellyfin.busy && jellyfin.items.some(row => row.kind === "song")
-            onTriggered: jellyfin.playItems(jellyfin.items)
+            text: provider.more ? "Play listed songs" : "Play songs"
+            enabled: !provider.busy && provider.items.some(row => row.kind === "song")
+            onTriggered: provider.playItems(provider.items)
         }
         Action {
             text: "Favorites"
-            onTriggered: jellyfin.show("favorites")
+            onTriggered: provider.show("favorites")
         }
         Action {
             text: "Genres"
-            onTriggered: jellyfin.show("genres")
+            onTriggered: provider.show("genres")
         }
         Action {
             text: "Recently played"
-            onTriggered: jellyfin.show("recent")
+            onTriggered: provider.show("recent")
         }
         Action {
-            objectName: "jellyfinNewPlaylist"
+            objectName: panel.prefix + "NewPlaylist"
             text: "New playlist…"
             onTriggered: {
                 panel.renameId = "";
@@ -444,29 +452,29 @@ Rectangle {
         }
         Action {
             text: "Rename playlist…"
-            visible: panel.playlistPage && !!jellyfin.collection.editable
+            visible: panel.playlistPage && !!provider.collection.editable
             height: visible ? 40 : 0
-            enabled: !jellyfin.actionBusy
+            enabled: !provider.actionBusy
             onTriggered: {
-                panel.renameId = jellyfin.collection.remoteId;
-                nameField.text = jellyfin.heading;
+                panel.renameId = provider.collection.remoteId;
+                nameField.text = provider.heading;
                 nameDialog.open();
             }
         }
         Action {
             text: "Delete playlist…"
-            visible: panel.playlistPage && !!jellyfin.collection.deletable
+            visible: panel.playlistPage && !!provider.collection.deletable
             height: visible ? 40 : 0
-            enabled: !jellyfin.actionBusy
+            enabled: !provider.actionBusy
             onTriggered: deleteDialog.open()
         }
         Action {
             text: "Refresh"
-            enabled: !jellyfin.busy
-            onTriggered: jellyfin.reload()
+            enabled: !provider.busy
+            onTriggered: provider.reload()
         }
         Action {
-            objectName: "jellyfinSettings"
+            objectName: panel.prefix + "Settings"
             text: "Server settings…"
             onTriggered: connection.open()
         }
@@ -475,20 +483,20 @@ Rectangle {
         id: actions
         Action {
             text: panel.selected.kind === "song" ? "Play" : "Open"
-            onTriggered: jellyfin.open(panel.selected)
+            onTriggered: provider.open(panel.selected)
         }
         Action {
             text: "Add to queue"
             enabled: panel.selected.kind === "song"
-            onTriggered: jellyfin.enqueue(panel.selected)
+            onTriggered: provider.enqueue(panel.selected)
         }
         Action {
             text: {
                 panel.revision;
-                return jellyfin.favorite(panel.selected.id || "") ? "Remove from favorites" : "Add to favorites";
+                return provider.favorite(panel.selected.id || "") ? "Remove from favorites" : "Add to favorites";
             }
-            enabled: !jellyfin.actionBusy
-            onTriggered: jellyfin.toggleFavorite(panel.selected)
+            enabled: !provider.actionBusy
+            onTriggered: provider.toggleFavorite(panel.selected)
         }
         Action {
             text: "Add to playlist…"
@@ -498,8 +506,8 @@ Rectangle {
         Action {
             text: "Open album"
             enabled: !!panel.selected.albumId
-            onTriggered: jellyfin.open({
-                source: "jellyfin",
+            onTriggered: provider.open({
+                source: "provider",
                 server: panel.selected.server,
                 kind: "album",
                 remoteId: panel.selected.albumId,
@@ -509,8 +517,8 @@ Rectangle {
         Action {
             text: "Open artist"
             enabled: !!panel.selected.artistId
-            onTriggered: jellyfin.open({
-                source: "jellyfin",
+            onTriggered: provider.open({
+                source: "provider",
                 server: panel.selected.server,
                 kind: "artist",
                 remoteId: panel.selected.artistId,
@@ -519,28 +527,28 @@ Rectangle {
         }
         Action {
             text: "Remove from playlist"
-            visible: panel.playlistPage && !!jellyfin.collection.editable
+            visible: panel.playlistPage && !!provider.collection.editable
             height: visible ? 40 : 0
-            enabled: !jellyfin.actionBusy
-            onTriggered: jellyfin.removeFromPlaylist(panel.selected)
+            enabled: !provider.actionBusy
+            onTriggered: provider.removeFromPlaylist(panel.selected)
         }
         Action {
             text: "Move up"
-            visible: panel.playlistPage && !!jellyfin.collection.editable
+            visible: panel.playlistPage && !!provider.collection.editable
             height: visible ? 40 : 0
-            enabled: !jellyfin.actionBusy && panel.selectedIndex > 0
-            onTriggered: jellyfin.movePlaylistItem(panel.selectedIndex, panel.selectedIndex - 1)
+            enabled: !provider.actionBusy && panel.selectedIndex > 0
+            onTriggered: provider.movePlaylistItem(panel.selectedIndex, panel.selectedIndex - 1)
         }
         Action {
             text: "Move down"
-            visible: panel.playlistPage && !!jellyfin.collection.editable
+            visible: panel.playlistPage && !!provider.collection.editable
             height: visible ? 40 : 0
-            enabled: !jellyfin.actionBusy && panel.selectedIndex >= 0 && panel.selectedIndex < jellyfin.items.length - 1
-            onTriggered: jellyfin.movePlaylistItem(panel.selectedIndex, panel.selectedIndex + 1)
+            enabled: !provider.actionBusy && panel.selectedIndex >= 0 && panel.selectedIndex < provider.items.length - 1
+            onTriggered: provider.movePlaylistItem(panel.selectedIndex, panel.selectedIndex + 1)
         }
         Action {
             text: "Copy link"
-            onTriggered: jellyfin.copyLink(panel.selected)
+            onTriggered: provider.copyLink(panel.selected)
         }
     }
     component LibraryDialog: Dialog {
@@ -591,8 +599,8 @@ Rectangle {
     }
     LibraryDialog {
         id: connection
-        objectName: "jellyfinConnection"
-        title: server.connected ? "Jellyfin settings" : "Connect to Jellyfin"
+        objectName: panel.prefix + "Connection"
+        title: server.connected ? server.serviceName + " settings" : "Connect to Jellyfin".replace("Jellyfin", panel.serviceLabel)
         standardButtons: Dialog.Close
         onAboutToShow: {
             address.text = server.address;
@@ -605,7 +613,7 @@ Rectangle {
         }
         onClosed: password.text = ""
         contentItem: ScrollView {
-            implicitHeight: Math.min(connectionFields.implicitHeight, Math.max(180, panel.height - 190))
+            implicitHeight: Math.min(connectionFields.implicitHeight, Math.max(180, panel.height - connection.header.implicitHeight - connection.footer.implicitHeight - connection.topPadding - connection.bottomPadding - 2 * connection.spacing - 32))
             contentWidth: availableWidth
             clip: true
             Column {
@@ -614,12 +622,12 @@ Rectangle {
                 spacing: 12
                 SpunSearchField {
                     id: address
-                    objectName: "jellyfinAddress"
+                    objectName: panel.prefix + "Address"
                     app: panel.app
                     searchIcon: false
                     width: parent.width
                     labelText: "Server URL"
-                    Accessible.name: "Jellyfin server URL"
+                    Accessible.name: "Jellyfin server URL".replace("Jellyfin", panel.serviceLabel)
                     enabled: !server.connecting
                     maximumLength: 2048
                     onActiveFocusChanged: if (!activeFocus)
@@ -627,7 +635,7 @@ Rectangle {
                 }
                 SpunSearchField {
                     id: username
-                    objectName: "jellyfinUsername"
+                    objectName: panel.prefix + "Username"
                     app: panel.app
                     searchIcon: false
                     width: parent.width
@@ -637,7 +645,7 @@ Rectangle {
                 }
                 SpunSearchField {
                     id: password
-                    objectName: "jellyfinPassword"
+                    objectName: panel.prefix + "Password"
                     app: panel.app
                     searchIcon: false
                     width: parent.width
@@ -649,7 +657,7 @@ Rectangle {
                 }
                 CheckBox {
                     id: remember
-                    objectName: "jellyfinRemember"
+                    objectName: panel.prefix + "Remember"
                     width: parent.width
                     implicitHeight: Math.max(48, rememberLabel.implicitHeight + 16)
                     text: "Remember connection"
@@ -718,7 +726,7 @@ Rectangle {
                 }
                 SpunButton {
                     id: signIn
-                    objectName: "jellyfinSignIn"
+                    objectName: panel.prefix + "SignIn"
                     text: server.connecting ? "Connecting…" : server.connected ? "Reconnect" : "Connect"
                     tonal: true
                     enabled: !server.connecting && address.text.trim().length > 0 && username.text.trim().length > 0
@@ -738,7 +746,7 @@ Rectangle {
                     onClicked: panel.openMenu(folderMenu, this)
                 }
                 SpunButton {
-                    objectName: "jellyfinQuality"
+                    objectName: panel.prefix + "Quality"
                     visible: server.connected
                     width: parent.width
                     text: server.bitrate ? server.bitrate + " kbps" : "Original quality"
@@ -770,7 +778,7 @@ Rectangle {
             text: "All music libraries"
             onTriggered: {
                 server.folder = "";
-                jellyfin.show("albums");
+                provider.show("albums");
             }
         }
         Instantiator {
@@ -780,7 +788,7 @@ Rectangle {
                 text: modelData.name
                 onTriggered: {
                     server.folder = modelData.id;
-                    jellyfin.show("albums");
+                    provider.show("albums");
                 }
             }
             onObjectAdded: (index, object) => folderMenu.insertItem(index + 1, object)
@@ -793,7 +801,7 @@ Rectangle {
             model: [0, 128, 192, 320]
             delegate: Action {
                 required property int modelData
-                objectName: "jellyfinQuality_" + modelData
+                objectName: panel.prefix + "Quality_" + modelData
                 text: modelData ? modelData + " kbps" : "Original quality"
                 onTriggered: server.bitrate = modelData
             }
@@ -803,7 +811,7 @@ Rectangle {
     }
     LibraryDialog {
         id: nameDialog
-        objectName: "jellyfinNameDialog"
+        objectName: panel.prefix + "NameDialog"
         title: panel.renameId.length ? "Rename playlist" : "New playlist"
         standardButtons: Dialog.Save | Dialog.Cancel
         onOpened: {
@@ -814,13 +822,13 @@ Rectangle {
         }
         onAccepted: {
             if (panel.renameId.length)
-                jellyfin.renamePlaylist(panel.renameId, nameField.text);
+                provider.renamePlaylist(panel.renameId, nameField.text);
             else
-                jellyfin.createPlaylist(nameField.text);
+                provider.createPlaylist(nameField.text);
         }
         contentItem: SpunSearchField {
             id: nameField
-            objectName: "jellyfinPlaylistName"
+            objectName: panel.prefix + "PlaylistName"
             app: panel.app
             searchIcon: false
             labelText: "Playlist name"
@@ -844,7 +852,7 @@ Rectangle {
                 width: playlistPicker.availableWidth
                 text: modelData.title
                 onClicked: {
-                    jellyfin.addToPlaylist(modelData.remoteId, panel.selected);
+                    provider.addToPlaylist(modelData.remoteId, panel.selected);
                     playlistPicker.close();
                 }
             }
@@ -855,9 +863,9 @@ Rectangle {
         title: "Delete playlist?"
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAboutToShow: standardButton(Dialog.Ok).text = "Delete"
-        onAccepted: jellyfin.deletePlaylist(jellyfin.collection.remoteId)
+        onAccepted: provider.deletePlaylist(provider.collection.remoteId)
         contentItem: SpunText {
-            text: "This deletes the playlist from Jellyfin."
+            text: "This deletes the playlist from Jellyfin.".replace("Jellyfin", panel.serviceLabel)
             wrapMode: Text.WordWrap
             color: panel.app.ink
             font.pixelSize: SpunStyle.body

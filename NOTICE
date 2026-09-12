@@ -53,3 +53,8 @@ The Jellyfin client, LRC parser, protocol tests and disposable-server fixture in
 src/jellyfinapi.*, src/jellyfinlrc.h, src/jellyfinprotocoltest.cpp and
 scripts/test-jellyfin-server.py are adapted from Sung, Copyright (c) 2026 Sung
 contributors, under the MIT license. See licenses/Sung-MIT.txt.
+
+The Subsonic client and protocol tests in src/subsonicapi.* and
+src/subsonicprotocoltest.cpp, and the Navidrome fixture in
+scripts/test-subsonic-server.py are adapted from Sung, Copyright (c) 2026
+Sung contributors, under the MIT license. See licenses/Sung-MIT.txt.

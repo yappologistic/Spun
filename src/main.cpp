@@ -7,8 +7,10 @@
 #include "player.h"
 #include "youtube.h"
 #include "jellyfin.h"
+#include "subsonicapi.h"
 #ifdef SPUN_DIAGNOSTICS
 #include "jellyfintest.h"
+#include "subsonictest.h"
 #endif
 #include "tx6.h"
 #include "tapesound.h"
@@ -1562,7 +1564,7 @@ int main(int argc, char **argv) {
     for (int i=1; i<argc; ++i) {
         const QByteArray option = QByteArray(argv[i]).split('=').first();
         if (option == "--") break;
-        if (option == "--test-jellyfin" || option == "--test-youtube-live" || option == "--test-youtube" || option == "--test-performance" || option == "--self-test" || option == "--test-tx6" || option == "--test-cd-deck" || option == "--test-cassette-deck" || option == "--test-turntable" || option == "--test-recorder" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
+        if (option == "--test-subsonic" || option == "--test-jellyfin" || option == "--test-youtube-live" || option == "--test-youtube" || option == "--test-performance" || option == "--self-test" || option == "--test-tx6" || option == "--test-cd-deck" || option == "--test-cassette-deck" || option == "--test-turntable" || option == "--test-recorder" || option == "--test-media-ui" || option == "--test-artwork" || option == "--test-3d-lighting" || option == "--test-3d-ui" || option == "--test-3d-library" || option == "--test-import-ui" || option == "--test-library" || option == "--smoke-live"
             || option == "--verify-cider" || option == "--verify-cider-writes" || option == "--inspect-cider" || option == "--inspect-library") {
             const auto executable = QFileInfo(QStringLiteral("/proc/self/exe")).symLinkTarget();
             const auto diagnostics = QFile::encodeName(QFileInfo(executable).absolutePath() + "/spun-diagnostics");
@@ -1603,6 +1605,7 @@ int main(int argc, char **argv) {
     parser.addOption({"benchmark", "Measure an isolated startup, idle, playing, mini, or cycle scene", "scene"});
     parser.addOption({"benchmark-medium", "Appearance for isolated measurements", "medium", "cd"});
     parser.addOption({"benchmark-3d", "Measure the native 3D asset rather than its 2D face"});
+    parser.addOption({"test-subsonic", "Verify Navidrome/Subsonic against a disposable server"});
     parser.addOption({"test-jellyfin", "Verify Jellyfin against a disposable server"});
     parser.addOption({"test-youtube-live", "Verify anonymous live YouTube playback with isolated state"});
     parser.addOption({"test-youtube", "Verify anonymous YouTube browsing, local library and playback"});
@@ -1633,7 +1636,7 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("files", "Music files or album folders to play", "[files…]");
     parser.process(app);
     if (parser.isSet("export-cover")) return Disc::fallbackArt().save(parser.value("export-cover")) ? 0 : 1;
-    const bool test = parser.isSet("test-jellyfin") || parser.isSet("test-youtube-live") || parser.isSet("test-youtube") || parser.isSet("test-performance") || parser.isSet("test-tx6") || parser.isSet("test-cd-deck") || parser.isSet("test-cassette-deck") || parser.isSet("test-turntable") || parser.isSet("test-recorder") || parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
+    const bool test = parser.isSet("test-subsonic") || parser.isSet("test-jellyfin") || parser.isSet("test-youtube-live") || parser.isSet("test-youtube") || parser.isSet("test-performance") || parser.isSet("test-tx6") || parser.isSet("test-cd-deck") || parser.isSet("test-cassette-deck") || parser.isSet("test-turntable") || parser.isSet("test-recorder") || parser.isSet("test-artwork") || parser.isSet("test-3d-lighting") || parser.isSet("test-3d-ui") || parser.isSet("test-3d-library") || parser.isSet("test-media-ui") || parser.isSet("benchmark") || parser.isSet("test-import-ui") || parser.isSet("self-test") || parser.isSet("smoke-live") || parser.isSet("test-library");
     if(test && qEnvironmentVariableIsSet("SPUN_TEST_SCREEN"))app.setDesktopFileName("spun-diagnostics");
     if (!test && !parser.isSet("config") && !parser.isSet("isolated")) {
         auto bus = QDBusConnection::sessionBus();
@@ -1669,6 +1672,11 @@ int main(int argc, char **argv) {
     Player player(settings);
     Youtube youtube(QFileInfo(settings).absolutePath() + "/youtube");
     Jellyfin jellyfin(QFileInfo(settings).absolutePath() + "/jellyfin", !test);
+    RemoteLibrary subsonic(QFileInfo(settings).absolutePath() + "/subsonic", !test, nullptr,
+        new SubsonicApi(!test, QFileInfo(settings).absolutePath() + "/subsonic/connection.ini"));
+    QObject::connect(&player, &Player::mediumChanged, &subsonic, [&]{subsonic.transport()->setMedium(player.medium());});
+    QObject::connect(&player, &Player::settingsChanged, &subsonic, [&]{subsonic.transport()->setVinylAlbumMode(player.vinylAlbumMode());});
+    subsonic.transport()->setMedium(player.medium());
     QObject::connect(&player, &Player::mediumChanged, &jellyfin, [&]{jellyfin.transport()->setMedium(player.medium());});
     QObject::connect(&player, &Player::settingsChanged, &jellyfin, [&]{jellyfin.transport()->setVinylAlbumMode(player.vinylAlbumMode());});
     jellyfin.transport()->setMedium(player.medium());
@@ -1721,6 +1729,7 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("player", &player);
     engine.rootContext()->setContextProperty("youtube", &youtube);
     engine.rootContext()->setContextProperty("jellyfin", &jellyfin);
+    engine.rootContext()->setContextProperty("subsonic", &subsonic);
     engine.rootContext()->setContextProperty("tx6", &tx6);
     engine.rootContext()->setContextProperty("theme", &theme);
     engine.rootContext()->setContextProperty("typography", &typography);
@@ -1779,7 +1788,7 @@ int main(int argc, char **argv) {
         window->setPosition(screen->availableGeometry().topLeft()+QPoint(60,60));
     }
     if (parser.isSet("youtube")) { window->setProperty("useYoutube",true);window->setProperty("libraryOpen",true); }
-    if (!test && !parser.isSet("isolated")) { if (auto *mediaControls = registerMpris(&player, &cider, youtube.transport(), jellyfin.transport())) mediaControls->setSourceWindow(window); }
+    if (!test && !parser.isSet("isolated")) { if (auto *mediaControls = registerMpris(&player, &cider, youtube.transport(), jellyfin.transport(), subsonic.transport())) mediaControls->setSourceWindow(window); }
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &player, &Player::save);
     if (parser.isSet("benchmark")) {
         window->setProperty("benchmarkPinned", true);
@@ -2199,6 +2208,7 @@ int main(int argc, char **argv) {
     else if (parser.isSet("test-3d-lighting")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeDLighting(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-ui")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseThreeD(player,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-3d-library")) QTimer::singleShot(650, &app, [&] { player.setThreeD(true); if(!waitFor([&]{return window->property("threeDActive").toBool();})) { std::cerr << "FAIL 3D scene must be active for Cider integration tests" << std::endl;app.exit(2);return; } app.exit(exerciseLibrary(window,temp.path(),parser.value("capture-dir")) ? 1 : 0); });
+    else if (parser.isSet("test-subsonic")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseSubsonic(player,subsonic,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-jellyfin")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseJellyfin(player,jellyfin,window,temp.path(),parser.value("capture-dir"))); });
     else if (parser.isSet("test-youtube-live")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseYoutubeLive(player,youtube,window,parser.value("capture-dir"))); });
     else if (parser.isSet("test-youtube")) QTimer::singleShot(650, &app, [&] { app.exit(exerciseYoutube(player,youtube,window,temp.path(),parser.value("capture-dir"))); });

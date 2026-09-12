@@ -50,7 +50,7 @@ class PlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(bool CanSeek READ canSeek)
     Q_PROPERTY(bool CanControl READ always CONSTANT)
 public:
-    explicit PlayerAdaptor(Player *p, Cider *cider = nullptr, Player *youtube = nullptr, Player *jellyfin = nullptr);
+    explicit PlayerAdaptor(Player *p, Cider *cider = nullptr, Player *youtube = nullptr, Player *jellyfin = nullptr, Player *subsonic = nullptr);
     void setRemote(bool remote);
     void setSourceWindow(QObject *window);
     QString trackId() const;
@@ -92,10 +92,11 @@ private:
     Player *m_local;
     Player *m_youtube;
     Player *m_jellyfin;
+    Player *m_subsonic;
     Cider *m_cider;
     QPointer<QObject> m_sourceWindow;
     bool m_remote = false, m_changePending = false;
     QVariantMap m_lastProperties;
 };
 
-PlayerAdaptor *registerMpris(Player *player, Cider *cider, Player *youtube = nullptr, Player *jellyfin = nullptr);
+PlayerAdaptor *registerMpris(Player *player, Cider *cider, Player *youtube = nullptr, Player *jellyfin = nullptr, Player *subsonic = nullptr);

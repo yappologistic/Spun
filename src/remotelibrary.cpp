@@ -1,4 +1,4 @@
-#include "jellyfin.h"
+#include "remotelibrary.h"
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
@@ -9,17 +9,21 @@
 #include <QJsonObject>
 #include <QSaveFile>
 
-Jellyfin::Jellyfin(const QString &directory, bool restore, QObject *parent)
-    : QObject(parent), m_api(restore, directory + "/connection.ini"),
-      m_player(directory + "/player.ini", this, true), m_directory(directory) {
-  m_player.setExternalName("Jellyfin");
+RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
+                             QObject *parent, RemoteMusicApi *api)
+    : QObject(parent),
+      m_apiOwner(api ? api
+                     : new JellyfinApi(restore, directory + "/connection.ini")),
+      m_api(*m_apiOwner), m_player(directory + "/player.ini", this, true),
+      m_directory(directory) {
+  m_player.setExternalName(m_api.serviceName());
   m_save.setSingleShot(true);
   m_save.setInterval(200);
-  connect(&m_save, &QTimer::timeout, this, &Jellyfin::persist);
-  connect(&m_api, &JellyfinApi::message, this, [this](const QString &s) {
+  connect(&m_save, &QTimer::timeout, this, &RemoteLibrary::persist);
+  connect(&m_api, &RemoteMusicApi::message, this, [this](const QString &s) {
     emit feedback(s, !m_api.error().isEmpty());
   });
-  connect(&m_api, &JellyfinApi::accountChanged, this, [this] {
+  connect(&m_api, &RemoteMusicApi::accountChanged, this, [this] {
     persist();
     ++m_generation;
     m_player.stop();
@@ -44,7 +48,8 @@ Jellyfin::Jellyfin(const QString &directory, bool restore, QObject *parent)
     m_error.clear();
     emit changed();
   });
-  connect(&m_api, &JellyfinApi::changed, this, [this] {
+  connect(&m_api, &RemoteMusicApi::changed, this, [this] {
+    m_player.setExternalName(m_api.serviceName());
     if (m_api.connected() && m_identity != m_api.identity()) {
       m_identity = m_api.identity();
       restoreQueue();
@@ -53,7 +58,8 @@ Jellyfin::Jellyfin(const QString &directory, bool restore, QObject *parent)
     }
     emit changed();
   });
-  connect(&m_player, &Player::externalRequested, this, &Jellyfin::loadCurrent);
+  connect(&m_player, &Player::externalRequested, this,
+          &RemoteLibrary::loadCurrent);
   connect(&m_player, &Player::externalCancelled, this,
           [this] { m_api.cancel("audio"); });
   connect(&m_player, &Player::trackChanged, this, [this] {
@@ -88,12 +94,12 @@ Jellyfin::Jellyfin(const QString &directory, bool restore, QObject *parent)
   connect(&m_reportTimer, &QTimer::timeout, this, [this] { report(); });
   m_reportTimer.start();
 }
-Jellyfin::~Jellyfin() {
+RemoteLibrary::~RemoteLibrary() {
   persist();
   report(true);
   m_player.stop();
 }
-void Jellyfin::setEnabled(bool value) {
+void RemoteLibrary::setEnabled(bool value) {
   if (m_enabled == value)
     return;
   m_enabled = value;
@@ -112,25 +118,25 @@ void Jellyfin::setEnabled(bool value) {
   }
   emit changed();
 }
-QVariantMap Jellyfin::original(const QVariantMap &row) const {
+QVariantMap RemoteLibrary::original(const QVariantMap &row) const {
   return m_catalog.value(row.value("id").toString(), row);
 }
-QVariantMap Jellyfin::current() const {
+QVariantMap RemoteLibrary::current() const {
   return m_catalog.value(m_player.currentUrl().path().mid(1));
 }
-void Jellyfin::show(const QString &mode) {
+void RemoteLibrary::show(const QString &mode) {
   m_back.clear();
   m_collection.clear();
   browse({{"mode", mode}});
 }
-void Jellyfin::search(const QString &query, const QString &filter) {
+void RemoteLibrary::search(const QString &query, const QString &filter) {
   m_back.clear();
   m_collection.clear();
   browse({{"mode", "search"},
           {"query", query.trimmed().left(512)},
           {"filter", filter}});
 }
-void Jellyfin::open(const QVariantMap &row) {
+void RemoteLibrary::open(const QVariantMap &row) {
   if (!m_api.owns(row))
     return;
   if (row.value("kind") == "song") {
@@ -144,19 +150,19 @@ void Jellyfin::open(const QVariantMap &row) {
   m_collection = row;
   browse({{"mode", row.value("kind")}, {"remoteId", row.value("remoteId")}});
 }
-void Jellyfin::back() {
+void RemoteLibrary::back() {
   if (m_back.isEmpty())
     return;
   auto state = m_back.takeLast().toMap();
   m_collection = state.value("collection").toMap();
   browse(state.value("request").toMap());
 }
-void Jellyfin::reload() { browse(m_request); }
-void Jellyfin::loadMore() {
+void RemoteLibrary::reload() { browse(m_request); }
+void RemoteLibrary::loadMore() {
   if (m_more && !m_busy)
     browse(m_request, true);
 }
-void Jellyfin::browse(const QVariantMap &request, bool append) {
+void RemoteLibrary::browse(const QVariantMap &request, bool append) {
   if (!m_api.connected())
     return;
   ++m_generation;
@@ -216,7 +222,7 @@ void Jellyfin::browse(const QVariantMap &request, bool append) {
     emit changed();
   });
 }
-QList<Track> Jellyfin::tracks(const QVariantList &rows) {
+QList<Track> RemoteLibrary::tracks(const QVariantList &rows) {
   QList<Track> out;
   for (const auto &v : rows) {
     auto row = original(v.toMap());
@@ -225,7 +231,7 @@ QList<Track> Jellyfin::tracks(const QVariantList &rows) {
     const auto id = row.value("id").toString();
     m_catalog[id] = row;
     Track t;
-    t.path = "jellyfin://" + m_api.identity() + "/" + id;
+    t.path = m_api.scheme() + "://" + m_api.identity() + "/" + id;
     t.title = row.value("title").toString();
     t.artist = row.value("artist").toString();
     t.album = row.value("album").toString();
@@ -240,25 +246,25 @@ QList<Track> Jellyfin::tracks(const QVariantList &rows) {
   }
   return out;
 }
-void Jellyfin::playItems(const QVariantList &rows, int index) {
+void RemoteLibrary::playItems(const QVariantList &rows, int index) {
   auto queue = tracks(rows);
   if (!queue.isEmpty())
     m_player.setExternalTracks(queue, qBound(0, index, int(queue.size() - 1)),
                                true);
 }
-void Jellyfin::playItem(const QVariantMap &row) { playItems({row}); }
-void Jellyfin::enqueue(const QVariantMap &row) {
+void RemoteLibrary::playItem(const QVariantMap &row) { playItems({row}); }
+void RemoteLibrary::enqueue(const QVariantMap &row) {
   auto queue = tracks({row});
   if (!queue.isEmpty()) {
     m_player.appendExternalTracks(queue);
     emit feedback("Added to queue", false);
   }
 }
-void Jellyfin::loadCurrent() {
+void RemoteLibrary::loadCurrent() {
   const auto row = current();
   const auto key = m_player.trackKey();
   if (!m_api.owns(row)) {
-    m_player.failExternal(key, "Connect to this song's Jellyfin server first.");
+    m_player.failExternal(key, "Connect to this song's music server first.");
     return;
   }
   auto buffer = std::make_shared<QTemporaryDir>();
@@ -277,7 +283,7 @@ void Jellyfin::loadCurrent() {
             key, QUrl::fromLocalFile(buffer->filePath("audio")));
       });
 }
-void Jellyfin::loadArt() {
+void RemoteLibrary::loadArt() {
   m_api.cancel("cover");
   const auto row = current();
   const auto key = m_player.trackKey();
@@ -295,7 +301,7 @@ void Jellyfin::loadArt() {
                 }
               });
 }
-QString Jellyfin::artwork(const QString &id) {
+QString RemoteLibrary::artwork(const QString &id) {
   if (m_thumbs.contains(id)) {
     m_thumbOrder.removeAll(id);
     m_thumbOrder.append(id);
@@ -306,11 +312,11 @@ QString Jellyfin::artwork(const QString &id) {
       id != m_thumbActive && !m_thumbPending.contains(id) &&
       m_thumbPending.size() < 64) {
     m_thumbPending.append(id);
-    QTimer::singleShot(0, this, &Jellyfin::loadThumbs);
+    QTimer::singleShot(0, this, &RemoteLibrary::loadThumbs);
   }
   return {};
 }
-void Jellyfin::loadThumbs() {
+void RemoteLibrary::loadThumbs() {
   if (m_thumbBusy || !m_enabled || !m_thumbnailDirectory.isValid())
     return;
   while (!m_thumbPending.isEmpty()) {
@@ -336,13 +342,13 @@ void Jellyfin::loadThumbs() {
               file.isEmpty() ? QString() : QUrl::fromLocalFile(file).toString();
           m_thumbOrder.append(id);
           emit artworkChanged();
-          QTimer::singleShot(0, this, &Jellyfin::loadThumbs);
+          QTimer::singleShot(0, this, &RemoteLibrary::loadThumbs);
         },
         "thumb");
     return;
   }
 }
-void Jellyfin::finishAction(const QString &error, bool refreshPage) {
+void RemoteLibrary::finishAction(const QString &error, bool refreshPage) {
   m_actionBusy = false;
   if (!error.isEmpty())
     emit feedback(error, true);
@@ -350,7 +356,7 @@ void Jellyfin::finishAction(const QString &error, bool refreshPage) {
     reload();
   emit changed();
 }
-void Jellyfin::toggleFavorite(const QVariantMap &row) {
+void RemoteLibrary::toggleFavorite(const QVariantMap &row) {
   if (m_actionBusy)
     return;
   m_actionBusy = true;
@@ -360,7 +366,7 @@ void Jellyfin::toggleFavorite(const QVariantMap &row) {
                finishAction(e, page() == "favorites");
              });
 }
-void Jellyfin::createPlaylist(const QString &name) {
+void RemoteLibrary::createPlaylist(const QString &name) {
   if (m_actionBusy || name.trimmed().isEmpty())
     return;
   m_actionBusy = true;
@@ -371,7 +377,7 @@ void Jellyfin::createPlaylist(const QString &name) {
       show("playlists");
   });
 }
-void Jellyfin::renamePlaylist(const QString &id, const QString &name) {
+void RemoteLibrary::renamePlaylist(const QString &id, const QString &name) {
   if (m_actionBusy || name.trimmed().isEmpty())
     return;
   m_actionBusy = true;
@@ -380,7 +386,7 @@ void Jellyfin::renamePlaylist(const QString &id, const QString &name) {
       id, {{"name", name.trimmed().left(120)}},
       [this](const QVariantMap &, const QString &e) { finishAction(e, true); });
 }
-void Jellyfin::addToPlaylist(const QString &id, const QVariantMap &row) {
+void RemoteLibrary::addToPlaylist(const QString &id, const QVariantMap &row) {
   if (m_actionBusy || !m_api.owns(row))
     return;
   m_actionBusy = true;
@@ -390,7 +396,7 @@ void Jellyfin::addToPlaylist(const QString &id, const QVariantMap &row) {
                        finishAction(e, page() == "playlist");
                      });
 }
-void Jellyfin::removeFromPlaylist(const QVariantMap &row) {
+void RemoteLibrary::removeFromPlaylist(const QVariantMap &row) {
   if (m_actionBusy || page() != "playlist" ||
       !m_collection.value("editable").toBool())
     return;
@@ -401,7 +407,7 @@ void Jellyfin::removeFromPlaylist(const QVariantMap &row) {
       {{"entryIdToRemove", row.value("entryId").toString()}},
       [this](const QVariantMap &, const QString &e) { finishAction(e, true); });
 }
-void Jellyfin::movePlaylistItem(int from, int to) {
+void RemoteLibrary::movePlaylistItem(int from, int to) {
   if (m_actionBusy || page() != "playlist" ||
       !m_collection.value("editable").toBool() || from < 0 || to < 0 ||
       from >= m_items.size() || to >= m_items.size() || from == to)
@@ -415,7 +421,7 @@ void Jellyfin::movePlaylistItem(int from, int to) {
       m_collection.value("remoteId").toString(), entry, to,
       [this](const QVariantMap &, const QString &e) { finishAction(e, true); });
 }
-void Jellyfin::deletePlaylist(const QString &id) {
+void RemoteLibrary::deletePlaylist(const QString &id) {
   if (m_actionBusy)
     return;
   m_actionBusy = true;
@@ -426,16 +432,16 @@ void Jellyfin::deletePlaylist(const QString &id) {
       show("playlists");
   });
 }
-void Jellyfin::copyLink(const QVariantMap &row) {
+void RemoteLibrary::copyLink(const QVariantMap &row) {
   if (!m_api.owns(row))
     return;
-  QUrl u(m_api.address() + "/web/index.html");
-  u.setFragment("/details?id=" + QString::fromLatin1(QUrl::toPercentEncoding(
-                                     row.value("remoteId").toString())));
+  const QUrl u = m_api.shareUrl(row);
+  if (u.isEmpty())
+    return;
   QGuiApplication::clipboard()->setText(u.toString());
   emit feedback("Link copied", false);
 }
-void Jellyfin::setActive(bool active) {
+void RemoteLibrary::setActive(bool active) {
   if (m_active == active)
     return;
   m_active = active;
@@ -447,7 +453,7 @@ void Jellyfin::setActive(bool active) {
   }
   emit changed();
 }
-void Jellyfin::refresh() {
+void RemoteLibrary::refresh() {
   m_lines.clear();
   m_timeline.reset({});
   m_lyricIndex = -1;
@@ -481,20 +487,20 @@ void Jellyfin::refresh() {
     emit changed();
   });
 }
-void Jellyfin::updateLyrics() {
+void RemoteLibrary::updateLyrics() {
   const auto i = m_timeline.indexAt(m_player.position());
   if (i != m_lyricIndex) {
     m_lyricIndex = i;
     emit currentIndexChanged();
   }
 }
-bool Jellyfin::seekToLine(int index) {
+bool RemoteLibrary::seekToLine(int index) {
   if (!m_timed || index < 0 || index >= m_lines.size())
     return false;
   m_player.seek(m_lines[index].toMap().value("start").toLongLong());
   return true;
 }
-void Jellyfin::report(bool stopped) {
+void RemoteLibrary::report(bool stopped) {
   if (stopped) {
     if (!m_reported.isEmpty())
       m_api.reportPlayback(m_reported, m_reportedPosition, true, true);
@@ -512,7 +518,7 @@ void Jellyfin::report(bool stopped) {
   m_reportedPosition = m_player.position();
   m_api.reportPlayback(row, m_reportedPosition, !m_player.playing(), false);
 }
-void Jellyfin::persist() {
+void RemoteLibrary::persist() {
   if (m_identity.isEmpty() || !m_storageValid)
     return;
   QDir().mkpath(m_directory);
@@ -533,7 +539,7 @@ void Jellyfin::persist() {
           .toJson(QJsonDocument::Compact));
   f.commit();
 }
-void Jellyfin::restoreQueue() {
+void RemoteLibrary::restoreQueue() {
   m_storageValid = true;
   QFile f(m_directory + "/queue-" + m_identity + ".json");
   if (!f.exists())
@@ -548,7 +554,7 @@ void Jellyfin::restoreQueue() {
       doc.object().value("version").toInt() != 1) {
     m_storageValid = false;
     emit feedback(
-        "Saved Jellyfin queue could not be read. It has been left untouched.",
+        "Saved server queue could not be read. It has been left untouched.",
         true);
     return;
   }

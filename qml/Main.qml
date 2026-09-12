@@ -87,17 +87,22 @@ ApplicationWindow {
     readonly property bool vinyl: player.vinyl
     onVinylChanged: Qt.callLater(updateMask)
     property bool useJellyfin: false
-    onUseJellyfinChanged: {
-        if (useJellyfin) { useYoutube=false; useCider=false; player.pause(); if(ciderService.playing)ciderService.pause() }
-        jellyfin.enabled=useJellyfin
+    property bool useSubsonic: false
+    readonly property bool useServer: useJellyfin || useSubsonic
+    readonly property var serverLibrary: useSubsonic ? subsonic : jellyfin
+    function serverSourceChanged() {
+        if (useServer) { useYoutube=false; useCider=false; player.pause(); if(ciderService.playing)ciderService.pause() }
+        jellyfin.enabled=useJellyfin; subsonic.enabled=useSubsonic
         stopSwap(); presentation.clear(); cancel3DPointer(); cancelSeekPreview(); discFlipped=false; libraryOpen=false
         clearQueueSelection(); cancelQueueDrag(); queueMenu.close(); songMenu.close(); musicBrowser.closeActions()
         Qt.callLater(function(){presentDisc();syncLyrics();updateMask()})
     }
+    onUseJellyfinChanged: { if(useJellyfin)useSubsonic=false; serverSourceChanged() }
+    onUseSubsonicChanged: { if(useSubsonic)useJellyfin=false; serverSourceChanged() }
     property bool useYoutube: false
-    readonly property var lyricService: useJellyfin ? jellyfin : useYoutube ? youtube : lyrics
+    readonly property var lyricService: useServer ? serverLibrary : useYoutube ? youtube : lyrics
     onUseYoutubeChanged: {
-        if (useYoutube) { useJellyfin=false; if (ciderService.playing) ciderService.pause(); useCider=false; player.pause() }
+        if (useYoutube) { useJellyfin=false;useSubsonic=false; if (ciderService.playing) ciderService.pause(); useCider=false; player.pause() }
         youtube.enabled=useYoutube
         stopSwap(); presentation.clear(); cancel3DPointer(); cancelSeekPreview(); discFlipped=false; libraryOpen=false
         clearQueueSelection(); cancelQueueDrag(); queueMenu.close(); songMenu.close(); musicBrowser.closeActions()
@@ -122,11 +127,11 @@ ApplicationWindow {
         running: root.useCider && root.visible && root.visibility !== Window.Minimized && (songMenu.visible || crossfadeMenu.visible || qualityPopup.visible)
         onTriggered: root.refreshOpenCiderDetails()
     }
-    property var deckPlayer: useCider ? root.ciderService : useJellyfin ? jellyfin.transport : useYoutube ? youtube.transport : player
-    onDeckPlayerChanged: tx6.setPlayer(useJellyfin ? jellyfin.transport : useYoutube ? youtube.transport : player)
-    readonly property string cassetteTrackIdentity: (useCider ? "cider:" : useJellyfin ? "jellyfin:" : useYoutube ? "youtube:" : "local:") + (deckPlayer.trackKey || "")
+    property var deckPlayer: useCider ? root.ciderService : useServer ? serverLibrary.transport : useYoutube ? youtube.transport : player
+    onDeckPlayerChanged: tx6.setPlayer(useServer ? serverLibrary.transport : useYoutube ? youtube.transport : player)
+    readonly property string cassetteTrackIdentity: (useCider ? "cider:" : useServer ? (useSubsonic ? "subsonic:" : "jellyfin:") : useYoutube ? "youtube:" : "local:") + (deckPlayer.trackKey || "")
     onCassetteTrackIdentityChanged: { cancel3DPointer(); Qt.callLater(syncTapeSound) }
-    function syncTapeSound() { tapeSound.observe(useCider ? "cider" : useJellyfin ? "jellyfin" : useYoutube ? "youtube" : "local", deckPlayer.trackKey || "") }
+    function syncTapeSound() { tapeSound.observe(useCider ? "cider" : useServer ? serverLibrary.server.scheme : useYoutube ? "youtube" : "local", deckPlayer.trackKey || "") }
     Binding { target: tapeSound; property: "enabled"; value: root.cassette && player.cassetteSounds }
     Binding { target: tapeSound; property: "volume"; value: root.deckPlayer.volume }
     Binding { target: vinylNoise; property: "active"; value: root.vinyl && root.deckPlayer.playing && !root.needleDragging }
@@ -147,7 +152,7 @@ ApplicationWindow {
         running: root.vinyl && player.vinylSkips && root.deckPlayer.playing && !root.needleDragging
         onTriggered: { root.skipGroove(); interval = 45000 + Math.floor(Math.random()*35000) }
     }
-    onUseCiderChanged: { if(useCider){useYoutube=false;useJellyfin=false;} stopSwap(); presentation.clear(); cancel3DPointer(); if (!useCider) root.listeningService.cancelAlbumPosition(); cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
+    onUseCiderChanged: { if(useCider){useYoutube=false;useJellyfin=false;useSubsonic=false;} stopSwap(); presentation.clear(); cancel3DPointer(); if (!useCider) root.listeningService.cancelAlbumPosition(); cancelSeekPreview(); artworkPopup.close(); recoveryPopup.close(); quickJump.close(); savedQueuePicker.close(); clearQueueSelection(); cleanupPopup.close(); qualityPopup.close(); if(libraryDragging)endLibraryDrag(false); preferences.close(); crossfadeMenu.close(); queueMenu.close(); cancelQueueDrag(); songMenu.close(); musicBrowser.closeActions(); if (!useCider) libraryOpen = false; if (useCider) player.pause(); root.ciderService.queueVisible = queueOpen && useCider; discFlipped = false; closeQueueSearch(); Qt.callLater(presentDisc); syncLyrics() }
     property bool lyricsView: false
     property real swapOffset: 0
     property real outgoingOffset: 0
@@ -159,11 +164,11 @@ ApplicationWindow {
     function resetSwap() { swapOffset = 0; outgoingOffset = 0; outgoingOpacity = 0; incomingOpacity = 1; lidOpen = 0; packageOpacity = 0 }
     function stopSwap() { discSwap.stop(); resetSwap(); presentation.releaseOutgoing() }
     function presentDisc() {
-        const albumKey = deckPlayer.count ? (useCider ? "cider:" : useJellyfin ? "jellyfin:" : useYoutube ? "youtube:" : "local:") + (deckPlayer.albumKey || deckPlayer.title) : ""
+        const albumKey = deckPlayer.count ? (useCider ? "cider:" : useServer ? (useSubsonic ? "subsonic:" : "jellyfin:") : useYoutube ? "youtube:" : "local:") + (deckPlayer.albumKey || deckPlayer.title) : ""
         presentation.present(deckPlayer.artwork, albumKey, animate && !recorder && !discFlipped && visible && platformNative.exposed)
     }
     function syncLibrary() { if (!visible || visibility === Window.Minimized) { songMenu.close(); musicBrowser.closeActions() }; library.active = libraryOpen && useCider && visible && visibility !== Window.Minimized }
-    function syncLyrics() { jellyfin.active = useJellyfin && discFlipped && lyricsView && visible && visibility !== Window.Minimized; lyrics.remote = useCider; lyrics.active = !useJellyfin && !useYoutube && discFlipped && lyricsView && visible && visibility !== Window.Minimized; youtube.active = useYoutube && discFlipped && lyricsView && visible && visibility !== Window.Minimized }
+    function syncLyrics() { jellyfin.active = useJellyfin && discFlipped && lyricsView && visible && visibility !== Window.Minimized; subsonic.active = useSubsonic && discFlipped && lyricsView && visible && visibility !== Window.Minimized; lyrics.remote = useCider; lyrics.active = !useServer && !useYoutube && discFlipped && lyricsView && visible && visibility !== Window.Minimized; youtube.active = useYoutube && discFlipped && lyricsView && visible && visibility !== Window.Minimized }
     onLyricsViewChanged: { syncLyrics(); if (discFlipped) Qt.callLater(focusDiscDetails) }
     onVisibilityChanged: { syncLibrary(); syncLyrics(); if (root.visibility === Window.Minimized) { stopSwap(); cancelSeekPreview() } }
     onVisibleChanged: { syncLibrary(); syncLyrics(); if (!root.visible) { stopSwap(); cancelSeekPreview() } }
@@ -184,7 +189,7 @@ ApplicationWindow {
         if (current < 0 || (useCider && (!discDetails.albumId || ciderService.discLoading || ciderService.discError.length))) return null
         return {rows: rows, total: total, current: current}
     }
-    readonly property string recordKey: recordMap ? (useCider ? "cider:" : useJellyfin ? "jellyfin:" : useYoutube ? "youtube:" : "local:") + recordMap.rows.map(row => (row.track.id || row.track.path) + ":" + row.duration).join("|") : ""
+    readonly property string recordKey: recordMap ? (useCider ? "cider:" : useServer ? (useSubsonic ? "subsonic:" : "jellyfin:") : useYoutube ? "youtube:" : "local:") + recordMap.rows.map(row => (row.track.id || row.track.path) + ":" + row.duration).join("|") : ""
     onRecordKeyChanged: { cancelSeekPreview(); scrubber.cancelScrub() }
     readonly property real recordProgress: recordMap ? Math.max(0, Math.min(1, (recordMap.rows[recordMap.current].start + deckPlayer.position) / recordMap.total)) : progress
     readonly property bool seekPreviewActive: !!activeSeekControl || scrubber.scrubbing || !!(tonearm && tonearm.dragging)
@@ -329,7 +334,7 @@ ApplicationWindow {
         useCider = true; libraryOpen = true
         return true
     }
-    function openArtistName(name) { if(useJellyfin){libraryOpen=true;jellyfin.search(name,"artists");return}; if(useYoutube){libraryOpen=true;youtube.search(name,"artists");return}; useCider = true; libraryOpen = true; library.showArtist(name) }
+    function openArtistName(name) { if(useServer){libraryOpen=true;serverLibrary.search(name,"artists");return}; if(useYoutube){libraryOpen=true;youtube.search(name,"artists");return}; useCider = true; libraryOpen = true; library.showArtist(name) }
     function openLibrary() { libraryOpen = !libraryOpen }
     readonly property bool queueControlsReady: !useCider || (!root.actionService.busy && root.ciderService.queueReady && !root.ciderService.queueBusy && !root.ciderService.controlBusy && !root.ciderService.queueError.length)
     readonly property bool queueReorderAllowed: queueControlsReady && !queueQuery.trim().length
@@ -446,7 +451,7 @@ ApplicationWindow {
     }
     property bool queueOpen: false
     property bool helpOpen: false
-    readonly property bool menuOpen: !!(jellyfinBrowser.item && jellyfinBrowser.item.actionsOpen) || !!(youtubeBrowser.item && youtubeBrowser.item.actionsOpen) || !!(tx6Controls && tx6Controls.popupOpen) || artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
+    readonly property bool menuOpen: !!(serverBrowser.item && serverBrowser.item.actionsOpen) || !!(youtubeBrowser.item && youtubeBrowser.item.actionsOpen) || !!(tx6Controls && tx6Controls.popupOpen) || artworkPopup.visible || helpOpen || recoveryPopup.visible || quickJump.visible || savedQueuePicker.visible || cleanupPopup.visible || qualityPopup.visible || savedQueueMenu.visible || saveQueuePopup.visible || deleteQueuePopup.visible || fontPicker.shown || fontPicker.opening || menu.visible || preferences.visible || crossfadeMenu.visible || queueMenu.visible || songMenu.visible || musicBrowser.actionsOpen
     property bool backgroundBlur: player.backgroundBlur && platformNative.supportsBlur
     onBackgroundBlurChanged: { platformNative.effects(root, backgroundBlur); Qt.callLater(updateMask) }
     property bool muted: false
@@ -479,7 +484,7 @@ ApplicationWindow {
     readonly property int feedbackTime: SpunStyle.feedback
     readonly property int transitionTime: SpunStyle.navigate
     property int tick: 0
-    function useLocal() { useJellyfin=false;
+    function useLocal() { useJellyfin=false;useSubsonic=false;
         useYoutube=false
         if (useCider && root.ciderService.playing) root.ciderService.pause()
         useCider = false
@@ -536,13 +541,13 @@ ApplicationWindow {
 
     Shortcut { sequence: "Alt+G"; enabled: actionNotice.shown && actionNotice.canUndo && !root.menuOpen; onActivated: noticeUndo.forceActiveFocus(Qt.ShortcutFocusReason) }
     Shortcut { sequence: "Ctrl+K"; enabled: !root.menuOpen || quickJump.visible; onActivated: quickJump.visible ? quickJump.close() : root.openQuickJump() }
-    Shortcut { sequence: "Space"; enabled: !(root.activeFocusItem instanceof AbstractButton) && !(root.useCider && root.queueOpen && trackList.activeFocus) && !(root.libraryOpen && musicBrowser.item && musicBrowser.item.trackListFocused) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useJellyfin) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() }
+    Shortcut { sequence: "Space"; enabled: !(root.activeFocusItem instanceof AbstractButton) && !(root.useCider && root.queueOpen && trackList.activeFocus) && !(root.libraryOpen && musicBrowser.item && musicBrowser.item.trackListFocused) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useServer) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() }
     Shortcut { sequence: "Ctrl+V"; enabled: !root.editingText && !root.menuOpen; onActivated: root.openMusicLink("", true) }
     Shortcut { sequence: "Ctrl+O"; enabled: !root.menuOpen; onActivated: files.open() }
     Shortcut { sequence: "Ctrl+Shift+O"; enabled: !root.menuOpen; onActivated: folder.open() }
     Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-    Shortcut { sequence: "Ctrl+F"; enabled: !root.menuOpen; onActivated: root.libraryOpen ? (root.useJellyfin ? jellyfinBrowser.item.focusSearch() : root.useYoutube ? youtubeBrowser.item.focusSearch() : musicBrowser.focusSearch()) : root.openQueueSearch() }
-    Shortcut { sequence: "Ctrl+B"; enabled: (root.useCider || root.useYoutube || root.useJellyfin) && !root.menuOpen; onActivated: root.openLibrary() }
+    Shortcut { sequence: "Ctrl+F"; enabled: !root.menuOpen; onActivated: root.libraryOpen ? (root.useServer ? serverBrowser.item.focusSearch() : root.useYoutube ? youtubeBrowser.item.focusSearch() : musicBrowser.focusSearch()) : root.openQueueSearch() }
+    Shortcut { sequence: "Ctrl+B"; enabled: (root.useCider || root.useYoutube || root.useServer) && !root.menuOpen; onActivated: root.openLibrary() }
     Shortcut { sequence: "Ctrl+L"; enabled: !root.menuOpen; onActivated: root.toggleQueue() }
     Shortcut { sequence: "Ctrl+M"; enabled: !root.menuOpen; onActivated: player.miniMode = !player.miniMode }
     Shortcut { sequence: "Right"; enabled: !(root.activeFocusItem instanceof Slider) && !root.editingText && !root.menuOpen; onActivated: root.deckPlayer.seek(root.deckPlayer.position + 5000) }
@@ -552,7 +557,7 @@ ApplicationWindow {
     Shortcut { sequence: "Up"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.min(1, root.deckPlayer.volume + .05) }
     Shortcut { sequence: "Down"; enabled: !(root.activeFocusItem instanceof Slider) && !root.libraryOpen && !trackList.activeFocus && !root.menuOpen && !root.editingText && !(root.discFlipped && (albumList.activeFocus || lyricList.activeFocus)); onActivated: root.deckPlayer.volume = Math.max(0, root.deckPlayer.volume - .05) }
     Shortcut { sequence: "M"; enabled: !root.editingText && !root.menuOpen; onActivated: root.toggleMute() }
-    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer || root.threeDHardwarePressed) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (jellyfinBrowser.item && jellyfinBrowser.item.actionsOpen) { jellyfinBrowser.item.closeActions(); return }; if (youtubeBrowser.item && youtubeBrowser.item.actionsOpen) { youtubeBrowser.item.closeActions(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if(root.useYoutube || root.useJellyfin){root.libraryOpen=false;return}; if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
+    Shortcut { sequence: "Escape"; onActivated: { if(root.threeDPointer || root.threeDHardwarePressed) { root.cancel3DPointer();return }; if(artworkPopup.visible) { artworkPopup.close();return }; if(root.activeSeekControl) { root.cancelSeekPreview();return }; if(scrubber.scrubbing) { scrubber.cancelScrub();return }; if(root.libraryDragging) { root.endLibraryDrag(false);return }; if(quickJump.visible) { quickJump.close();return }; if(savedQueuePicker.visible) { savedQueuePicker.close();return }; if(cleanupPopup.visible) { cleanupPopup.close();return }; if(qualityPopup.visible) { qualityPopup.close();return }; if (saveQueuePopup.visible) { saveQueuePopup.close(); return }; if (deleteQueuePopup.visible) { deleteQueuePopup.close(); return }; if (savedQueueMenu.visible) { savedQueueMenu.close(); return }; if (fontPicker.shown || fontPicker.opening) { fontPicker.close(); return }; if (preferences.visible) { preferences.close(); return }; if (crossfadeMenu.visible) { crossfadeMenu.close(); return }; if (queueMenu.visible) { queueMenu.close(); return }; if (songMenu.visible) { songMenu.close(); return }; if (serverBrowser.item && serverBrowser.item.actionsOpen) { serverBrowser.item.closeActions(); return }; if (youtubeBrowser.item && youtubeBrowser.item.actionsOpen) { youtubeBrowser.item.closeActions(); return }; if (musicBrowser.actionsOpen) { musicBrowser.closeActions(); return }; if (menu.visible) { menu.close(); return }; if (root.queueSelectionCount > 0) { root.clearQueueSelection(); return }; if (root.queueSearchOpen) { root.closeQueueSearch(); return }; if (root.libraryOpen) { if(root.useYoutube || root.useServer){root.libraryOpen=false;return}; if (musicBrowser.item && musicBrowser.item.selectionCount > 0) musicBrowser.item.clearSelection(); else if (musicBrowser.detail && musicBrowser.browser.collectionQuery.length) musicBrowser.browser.collectionQuery = ""; else if (musicBrowser.detail) musicBrowser.browser.back(); else root.libraryOpen = false; return }; if (root.discFlipped) { root.discFlipped = false; return }; root.queueOpen = false; root.helpOpen = false; menu.close(); if (root.miniMode) player.miniMode = false } }
     Shortcut { sequence: "Y"; enabled: !root.editingText && !root.menuOpen; onActivated: { if (root.deckPlayer.count) { root.discFlipped = true; root.lyricsView = !root.lyricsView } } }
     Shortcut { sequence: "F"; enabled: !root.editingText && !root.menuOpen; onActivated: root.flipDisc() }
     Shortcut { sequence: "F1"; enabled: !root.menuOpen; onActivated: root.helpOpen = !root.helpOpen }
@@ -608,37 +613,38 @@ ApplicationWindow {
         id: badge
         objectName: "sourceBar"
         visible: !root.miniMode
-        x: (root.playerWidth - width) / 2; y: 13; width: platformNative.hyprland ? 424 : 512; height: 48; radius: 24
+        x: (root.playerWidth - width) / 2; y: 13; width: platformNative.hyprland ? 504 : 512; height: 48; radius: 24
+        readonly property real tabWidth: platformNative.hyprland ? 80 : 64
         color: root.surface
         border.width: 0
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
         Rectangle {
             objectName: "sourceIndicator"
-            SpunSpring { id: sourceMotion; targetValue: root.useJellyfin ? 296 : root.useYoutube ? 216 : root.useCider ? 136 : 56 }
-            x: sourceMotion.value; y: 6; width: 80; height: 36; radius: 18
+            SpunSpring { id: sourceMotion; targetValue: 56 + badge.tabWidth * (root.useSubsonic ? 4 : root.useJellyfin ? 3 : root.useYoutube ? 2 : root.useCider ? 1 : 0) }
+            x: sourceMotion.value; y: 6; width: badge.tabWidth; height: 36; radius: 18
             color: root.inset
         }
         Row {
             id: sourceTabs
             function focusTab(index) {
-                const button = sourceTabItems.itemAt(Math.max(0, Math.min(3, index)))
+                const button = sourceTabItems.itemAt(Math.max(0, Math.min(4, index)))
                 if (button) button.forceActiveFocus(Qt.TabFocusReason)
             }
             x: 56; y: 6; spacing: 0
             Repeater {
                 id: sourceTabItems
-                model: ["Local", "Cider", "YouTube", "Jellyfin"]
+                model: ["Local", "Cider", "YouTube", "Jellyfin", "Subsonic"]
                 AbstractButton {
                     id: sourceTab
-                    objectName: index === 0 ? "localSourceButton" : index === 1 ? "ciderSourceButton" : index === 2 ? "youtubeSourceButton" : "jellyfinSourceButton"
+                    objectName: index === 0 ? "localSourceButton" : index === 1 ? "ciderSourceButton" : index === 2 ? "youtubeSourceButton" : index === 3 ? "jellyfinSourceButton" : "subsonicSourceButton"
                     required property string modelData
                     required property int index
-                    width: 80; height: 36
+                    width: badge.tabWidth; height: 36
                     focusPolicy: Qt.StrongFocus
                     hoverEnabled: true
                     Accessible.name: modelData
                     Accessible.role: Accessible.PageTab
-                    Accessible.selectable: true; Accessible.selected: (root.useJellyfin ? 3 : root.useYoutube ? 2 : root.useCider ? 1 : 0) === index
+                    Accessible.selectable: true; Accessible.selected: (root.useSubsonic ? 4 : root.useJellyfin ? 3 : root.useYoutube ? 2 : root.useCider ? 1 : 0) === index
                     Keys.onShortcutOverride: event => {
                         if (event.modifiers === Qt.NoModifier && [Qt.Key_Left, Qt.Key_Right, Qt.Key_Home, Qt.Key_End].includes(event.key)) event.accepted = true
                     }
@@ -646,7 +652,7 @@ ApplicationWindow {
                     Keys.onRightPressed: sourceTabs.focusTab(index + 1)
                     Keys.onPressed: event => {
                         if (event.key === Qt.Key_Home) { sourceTabs.focusTab(0); event.accepted = true }
-                        else if (event.key === Qt.Key_End) { sourceTabs.focusTab(3); event.accepted = true }
+                        else if (event.key === Qt.Key_End) { sourceTabs.focusTab(4); event.accepted = true }
                         else event.accepted = false
                     }
 
@@ -658,26 +664,26 @@ ApplicationWindow {
                         SpunStateLayer { anchors.fill: parent; radius: parent.radius; color: root.ink; pressed: sourceTab.down; focused: sourceTab.visualFocus; hovered: sourceTab.hovered }
                         border.width: sourceTab.visualFocus ? 2 : 0; border.color: root.accent
                     }
-                    contentItem: SpunText { text: parent.modelData; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; color: ((root.useJellyfin ? 3 : root.useYoutube ? 2 : root.useCider ? 1 : 0) === parent.index) ? root.accent : root.mutedInk; font.pixelSize: SpunStyle.body; font.weight: Font.Medium }
-                    onClicked: { if(index===0)root.useLocal(); else if(index===1){root.useYoutube=false;root.useCider=true;if(player.ciderAutoStart)root.ciderService.ensureRunning()} else if(index===2){root.useYoutube=true;root.libraryOpen=true} else {root.useJellyfin=true;root.libraryOpen=true} }
+                    contentItem: SpunText { text: parent.modelData; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; color: ((root.useSubsonic ? 4 : root.useJellyfin ? 3 : root.useYoutube ? 2 : root.useCider ? 1 : 0) === parent.index) ? root.accent : root.mutedInk; font.pixelSize: SpunStyle.body; font.weight: Font.Medium }
+                    onClicked: { if(index===0)root.useLocal(); else if(index===1){root.useYoutube=false;root.useCider=true;if(player.ciderAutoStart)root.ciderService.ensureRunning()} else if(index===2){root.useYoutube=true;root.libraryOpen=true} else if(index===3){root.useJellyfin=true;root.libraryOpen=true} else {root.useSubsonic=true;root.libraryOpen=true} }
                 }
             }
         }
         IconButton {
             objectName: "addMusicButton"
-            x: 4; y: 4; glyphName: root.useCider || root.useYoutube || root.useJellyfin ? "search" : "plus"; tip: root.useCider || root.useYoutube || root.useJellyfin ? "Browse music · Ctrl+B" : "Add music · Ctrl+O"
+            x: 4; y: 4; glyphName: root.useCider || root.useYoutube || root.useServer ? "search" : "plus"; tip: root.useCider || root.useYoutube || root.useServer ? "Browse music · Ctrl+B" : "Add music · Ctrl+O"
             selected: root.libraryOpen; fill: root.libraryOpen ? root.inset : "transparent"
-            ink: root.libraryOpen ? root.accent : root.ink; hoverFill: root.hoverFill; onClicked: root.useCider || root.useYoutube || root.useJellyfin ? root.openLibrary() : files.open()
+            ink: root.libraryOpen ? root.accent : root.ink; hoverFill: root.hoverFill; onClicked: root.useCider || root.useYoutube || root.useServer ? root.openLibrary() : files.open()
         }
         IconButton {
             objectName: "queueButton"
-            x: 380; y: 4; glyphName: "queue"; tip: "Queue · Ctrl+L"
+            x: 60 + 5 * badge.tabWidth; y: 4; glyphName: "queue"; tip: "Queue · Ctrl+L"
             selected: root.queueOpen; fill: root.queueOpen ? root.inset : "transparent"
             ink: root.queueOpen ? root.accent : root.ink; hoverFill: root.hoverFill
             onClicked: root.queueOpen = !root.queueOpen
         }
-        IconButton { visible: !platformNative.hyprland; x: 424; y: 4; glyphName: "minus"; tip: "Minimize"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.showMinimized() }
-        IconButton { visible: !platformNative.hyprland; x: 468; y: 4; glyphName: "close"; tip: "Close Spun"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: Qt.quit() }
+        IconButton { visible: !platformNative.hyprland; x: 104 + 5 * badge.tabWidth; y: 4; glyphName: "minus"; tip: "Minimize"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: root.showMinimized() }
+        IconButton { visible: !platformNative.hyprland; x: 148 + 5 * badge.tabWidth; y: 4; glyphName: "close"; tip: "Close Spun"; ink: root.mutedInk; hoverFill: root.hoverFill; onClicked: Qt.quit() }
     }
 
     Item {
@@ -1375,7 +1381,7 @@ ApplicationWindow {
         Row {
             x: 8; y: 4; spacing: 0
             IconButton { id: miniPrevious; objectName: "miniPrevious"; glyphName: "previous"; tip: "Previous track"; ink: root.ink; hoverFill: root.hoverFill; enabled: root.useCider ? root.ciderService.canPrevious : root.deckPlayer.count > 0; onClicked: root.deckPlayer.previous() }
-            IconButton { id: miniPlay; objectName: "miniPlay"; glyphSize: 26; width: 48; glyphName: root.deckPlayer.playing ? "pause" : "play"; tip: root.deckPlayer.playing ? "Pause" : "Play"; fill: root.accent; ink: theme.colors.onAccent; hoverFill: Qt.lighter(root.accent,1.08); onClicked: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useJellyfin) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() }
+            IconButton { id: miniPlay; objectName: "miniPlay"; glyphSize: 26; width: 48; glyphName: root.deckPlayer.playing ? "pause" : "play"; tip: root.deckPlayer.playing ? "Pause" : "Play"; fill: root.accent; ink: theme.colors.onAccent; hoverFill: Qt.lighter(root.accent,1.08); onClicked: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useServer) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open() }
             IconButton { id: miniNext; objectName: "miniNext"; Accessible.description: miniPeek.visible ? miniPeek.summary : ""; showTip: false; glyphName: "next"; tip: "Next track"; ink: root.ink; hoverFill: root.hoverFill; enabled: root.useCider ? root.ciderService.canNext : root.deckPlayer.count > 0; onClicked: root.deckPlayer.next()
                 NextTrackTip { id: miniPeek; app: root; visible: root.miniMode && miniNext.enabled && (miniNext.hovered || miniNext.visualFocus) && !miniNext.down && !quickJump.visible }
             }
@@ -1392,22 +1398,22 @@ ApplicationWindow {
         MouseArea { anchors.fill: parent; onPressed: root.startSystemMove() }
         SpunText {
             id: playerSongTitle; objectName: "songTitle"
-            x: 24; y: 16; width: root.useCider || root.useYoutube || root.useJellyfin ? 238 : 272
+            x: 24; y: 16; width: root.useCider || root.useYoutube || root.useServer ? 238 : 272
             text: root.deckPlayer.title; color: root.ink; elide: Text.ElideRight
             font.pixelSize: SpunStyle.title; font.weight: Font.Normal
         }
         IconButton {
             objectName: "currentSongActions"
-            visible: root.useCider || root.useYoutube || root.useJellyfin; enabled: root.deckPlayer.count > 0
+            visible: root.useCider || root.useYoutube || root.useServer; enabled: root.deckPlayer.count > 0
             x: 264; y: 12; width: 40; height: 40
             glyphName: "more"; tip: "Song actions"; ink: root.mutedInk; hoverFill: root.hoverFill
-            onClicked: { if(root.useJellyfin){root.libraryOpen=true;Qt.callLater(function(){if(jellyfinBrowser.item)jellyfinBrowser.item.menuFor(jellyfin.current,-1)});return}; if(root.useYoutube){root.libraryOpen=true;Qt.callLater(function(){if(youtubeBrowser.item)youtubeBrowser.item.menuFor(youtube.current,-1)});return}; menu.close(); songMenu.x = deck.x + deck.width - songMenu.width; songMenu.y = Qt.binding(function() { return deck.y - songMenu.height - 8 }); songMenu.open() }
+            onClicked: { if(root.useServer){root.libraryOpen=true;Qt.callLater(function(){if(serverBrowser.item)serverBrowser.item.menuFor(serverLibrary.current,-1)});return}; if(root.useYoutube){root.libraryOpen=true;Qt.callLater(function(){if(youtubeBrowser.item)youtubeBrowser.item.menuFor(youtube.current,-1)});return}; menu.close(); songMenu.x = deck.x + deck.width - songMenu.width; songMenu.y = Qt.binding(function() { return deck.y - songMenu.height - 8 }); songMenu.open() }
         }
         AbstractButton {
             id: playerArtist
             objectName: "playerArtistLink"
             x: 24; y: 44; width: 284; height: 28
-            enabled: (root.useCider || root.useYoutube || root.useJellyfin) && root.deckPlayer.artist.length > 0; hoverEnabled: true
+            enabled: (root.useCider || root.useYoutube || root.useServer) && root.deckPlayer.artist.length > 0; hoverEnabled: true
             Accessible.name: "View artist " + root.deckPlayer.artist
             background: null
             onClicked: root.openArtistName(root.deckPlayer.artist)
@@ -1436,7 +1442,7 @@ ApplicationWindow {
                 glyphName: root.deckPlayer.playing ? "pause" : "play"
                 tip: root.deckPlayer.playing ? "Pause · Space" : "Play · Space"
                 fill: root.accent; ink: theme.colors.onAccent; hoverFill: Qt.lighter(root.accent, 1.08)
-                onClicked: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useJellyfin) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open()
+                onClicked: root.deckPlayer.count ? root.deckPlayer.toggle() : (root.useYoutube || root.useServer) ? root.openLibrary() : root.useCider ? root.ciderService.toggle() : files.open()
             }
             IconButton { objectName: "nextButton"; y: 4; glyphName: "next"; tip: "Next track · Ctrl+→"; ink: root.ink; hoverFill: root.hoverFill; enabled: root.useCider ? root.ciderService.canNext : root.deckPlayer.count > 0; onClicked: root.deckPlayer.next() }
             IconButton {
@@ -1466,7 +1472,7 @@ ApplicationWindow {
         objectName: "demoHint"
         x: deck.x + 3; y: 705 + root.mixerHeightExtra; width: 400; horizontalAlignment: Text.AlignHCenter
         visible: !root.miniMode
-        text: root.useCider || root.useYoutube || root.useJellyfin || player.count ? "" : "Play demo"
+        text: root.useCider || root.useYoutube || root.useServer || player.count ? "" : "Play demo"
         color: root.mutedInk; font.pixelSize: SpunStyle.caption
         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { root.useLocal(); player.demo() } }
     }
@@ -1767,8 +1773,8 @@ ApplicationWindow {
                 }
                 onClicked: root.ciderService.raise()
             }
-            IconButton { visible: !root.useCider && !root.useYoutube && !root.useJellyfin; x: 0; anchors.verticalCenter: parent.verticalCenter; glyphName: "plus"; tip: "Add tracks"; ink: root.ink; hoverFill: root.hoverFill; onClicked: files.open() }
-            IconButton { visible: !root.useCider && !root.useYoutube && !root.useJellyfin; x: SpunStyle.target + SpunStyle.smallGap; anchors.verticalCenter: parent.verticalCenter; glyphName: "folder"; tip: "Add music folder"; ink: root.ink; hoverFill: root.hoverFill; onClicked: folder.open() }
+            IconButton { visible: !root.useCider && !root.useYoutube && !root.useServer; x: 0; anchors.verticalCenter: parent.verticalCenter; glyphName: "plus"; tip: "Add tracks"; ink: root.ink; hoverFill: root.hoverFill; onClicked: files.open() }
+            IconButton { visible: !root.useCider && !root.useYoutube && !root.useServer; x: SpunStyle.target + SpunStyle.smallGap; anchors.verticalCenter: parent.verticalCenter; glyphName: "folder"; tip: "Add music folder"; ink: root.ink; hoverFill: root.hoverFill; onClicked: folder.open() }
             Button {
                 id: clearQueueButton
                 visible: !root.useCider; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: 76; height: SpunStyle.target
@@ -1790,7 +1796,7 @@ ApplicationWindow {
     Loader {
         id: musicBrowser
         x: jewelCase.x; anchors.top: jewelCase.top; width: jewelCase.width; anchors.bottom: deck.bottom
-        visible: root.libraryOpen && !root.useYoutube && !root.useJellyfin
+        visible: root.libraryOpen && !root.useYoutube && !root.useServer
         active: false
         // Build the browser on its first opening, then retain its scroll, search,
         // focus and transition state for every subsequent visit.
@@ -1811,12 +1817,13 @@ ApplicationWindow {
         sourceComponent: YoutubePanel { app: root }
     }
     Loader {
-        id: jellyfinBrowser
+        id: serverBrowser
         x: youtubeBrowser.x; y: youtubeBrowser.y; width: youtubeBrowser.width; height: youtubeBrowser.height
-        active: root.useJellyfin; visible: root.useJellyfin && root.libraryOpen
-        sourceComponent: JellyfinPanel { app: root }
+        active: root.useServer; visible: root.useServer && root.libraryOpen
+        sourceComponent: RemoteLibraryPanel { app: root; provider: root.serverLibrary }
     }
     Connections { target: jellyfin; function onFeedback(message,error){root.notifyAction(message,error)} }
+    Connections { target: subsonic; function onFeedback(message,error){root.notifyAction(message,error)} }
     Connections { target: youtube; function onFeedback(message,error){root.notifyAction(message,error)} }
 
     function previewQueueCleanup(mode) {
@@ -2130,7 +2137,7 @@ ApplicationWindow {
 
         SettingsAction { text: "Add tracks"; glyphName: "plus"; hint: "Ctrl+O"; onTriggered: files.open() }
         SettingsAction { text: "Add music folder"; glyphName: "folder"; hint: "Ctrl+Shift+O"; onTriggered: folder.open() }
-        SettingsAction { text: "Change artwork"; glyphName: "artwork"; enabled: !root.useCider && !root.useYoutube && !root.useJellyfin && player.count > 0; onTriggered: cover.open() }
+        SettingsAction { text: "Change artwork"; glyphName: "artwork"; enabled: !root.useCider && !root.useYoutube && !root.useServer && player.count > 0; onTriggered: cover.open() }
         SettingsGap {}
         SettingsAction { objectName: "quickJumpAction"; text: "Quick jump"; hint: "Ctrl+K"; glyphName: "search"; onTriggered: root.openQuickJump() }
         SettingsAction { objectName: "flipDiscAction"; text: root.discFlipped ? "Show artwork" : "Flip disc"; glyphName: "flip"; hint: "F"; enabled: root.deckPlayer.count > 0; onTriggered: root.flipDisc() }

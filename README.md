@@ -22,7 +22,7 @@
   <a href="#license">License</a>
 </p>
 
-Play local music, browse YouTube Music anonymously, connect to Jellyfin, or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record, cassette or TP-7-inspired recorder, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
+Play local music, browse YouTube Music anonymously, connect to Jellyfin, Navidrome or Subsonic, or control Apple Music through Cider. Spun puts your album artwork on a spinning CD, vinyl record, cassette or TP-7-inspired recorder, with an interface inspired by Material Design 3. Optional 3D players add physical depth and lighting that follows Noctalia's wallpaper palette.
 
 **Source-available · PolyForm Noncommercial 1.0.0.** Personal and other permitted noncommercial use is free. This is not an OSI-approved open-source license. [Read the license details](#license).
 
@@ -136,7 +136,7 @@ Choose a medium in **More → Preferences**. All four share playback controls, a
 
 In the TP-7 view, toggle **TX–6** beside the player. It works in 2D and 3D, with a modeled USB-C cable between the devices.
 
-- Channel 1 carries Local, YouTube or Jellyfin TP-7 audio. Right-click channels 2–6 to load additional local files; all channels follow TP-7 playback and seeking.
+- Channel 1 carries Local, YouTube, Jellyfin or Subsonic TP-7 audio. Right-click channels 2–6 to load additional local files; all channels follow TP-7 playback and seeking.
 - The knob rows adjust high, mid and low EQ. Drag a fader or click its track to set the level. Press a channel key to mute; Shift-click to solo, or press the mixer's Shift button first.
 - The master knob controls player volume. FX I adds stereo delay; FX II enables compression. Hide or power off the mixer to bypass it.
 - The paired 3D view expands to make controls easier to reach. Buttons press inward and spring back on release.
@@ -193,6 +193,14 @@ Jellyfin uses the same transport, queue, desktop media controls, timed lyrics an
 
 Playback currently buffers one song to a temporary file before it starts, with a 512 MiB limit per song. Transcoding requires permission on your server. Collections are limited to 20,000 entries. This integration is for music; video, offline downloads and server administration are not included.
 
+### Connect to Navidrome or Subsonic
+
+Choose **Subsonic**, then **Connect**. Enter the server root URL (including any base path, without `/rest`), username and password. Use HTTPS for remote servers. **Remember connection** stores the password in the desktop keyring through `secret-tool`; without a working keyring, sign in each time. Requests use salted token authentication.
+
+Albums, artists, songs, genres, search, favorites, playlists, artwork and lyrics use the same library UI and native 2D/3D players as Jellyfin, including TX-6 and desktop media controls. Each account has a separate queue that restores paused. Settings offer music-folder selection, original audio or 128/192/320 kbps transcoding, and optional now-playing/listening reports. Timed lyrics use OpenSubsonic when available, with a legacy lyrics fallback. Only playlist owners can edit; stale playlist orders must be refreshed before removing or moving tracks.
+
+The same 512 MiB temporary audio buffer and 20,000-entry collection limits apply. This is a music integration, using Subsonic 1.16.1 and supported OpenSubsonic extensions. Server capabilities and permissions determine available transcoding and lyrics; original Subsonic servers may require Premium. Listening reports count elapsed playback, not seeks; the protocol has no pause/stop session endpoint.
+
 ### Browse through Cider
 
 Use the top-left search button to browse songs, albums, playlists and artists without leaving Spun.
@@ -223,7 +231,7 @@ Cider changes refresh the visible queue and relevant details. Temporary connecti
 
 Choose your font, interface size, background blur, animations and media appearance in **More → Preferences**. Spun follows Noctalia's colors and reduced-motion setting when available. Reduced motion also skips loading sequences and perspective tilt.
 
-Spun's desktop media entry follows the selected Local, Cider, YouTube or Jellyfin source, including artwork, playback state, volume and seeking. Cider may also expose its own entry. Hyprland integration depends on the compositor's supported interfaces.
+Spun's desktop media entry follows the selected Local, Cider, YouTube, Jellyfin or Subsonic source, including artwork, playback state, volume and seeking. Cider may also expose its own entry. Hyprland integration depends on the compositor's supported interfaces.
 
 **Audio settings** contains crossfade and, where supported by Cider, Automix and listening modes. **Audio quality** in the current song's menu shows what Cider reports and labels device output separately.
 
@@ -317,6 +325,15 @@ python3 scripts/test-jellyfin-server.py --server-binary /path/to/jellyfin \
 ```
 
 This creates a private, disposable server with generated FLAC, MP3 and Opus music, two libraries and test accounts. It tests authentication, browsing, pagination, playlists, favorites, playback, seeking, lyrics, artwork, reporting and source isolation, then stops the server. Add `--renderer 3d` for software-rendered 3D checks, or `--renderer native` in a separate Wayland test session. Test output contains temporary credentials and must not be committed or shared. Jellyfin 10.11 and 12 are tested; other server versions and plugins may behave differently.
+
+For Navidrome integration checks, use a Navidrome server binary with the same disposable fixture workflow:
+
+```bash
+python3 scripts/test-subsonic-server.py --server-binary /path/to/navidrome \
+  --test-binary ./build/spun --output /tmp/spun-subsonic-test
+```
+
+The fixture generates 105 tracks and owner/reader accounts, tests the full music workflow, and stops the server afterward. `--renderer native` belongs in a separate Wayland test session. Protocol tests cover classic Subsonic responses, OpenSubsonic extensions, authentication, permissions, cancellation and stale playlist edits. Keep fixture output private; it contains temporary test credentials.
 
 For the complete 3D interaction and Cider-fixture suites, run `SPUN_TEST_RENDERER=native ./scripts/test-3d.sh` in a separate Wayland or X11 test session. This includes projected seeking, tonearm gestures, lid transitions, scaling and mode combinations. Set `SPUN_TEST_SCREEN` to the dedicated output name and `SPUN_TEST_OUTPUT` to a local capture directory. Missing 3D rendering fails the checks instead of silently skipping them.
 
