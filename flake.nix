@@ -38,7 +38,6 @@
               pkgs.cmake
               pkgs.ninja
               pkgs.pkg-config
-              pkgs.python3
               pkgs.copyDesktopItems
               qt6.wrapQtAppsHook
             ];
@@ -54,7 +53,6 @@
             ];
 
             cmakeFlags = [
-              (pkgs.lib.cmakeFeature "CMAKE_BUILD_TYPE" "Release")
               (pkgs.lib.cmakeBool "BUILD_TESTING" false)
               (pkgs.lib.cmakeBool "SPUN_ENABLE_3D" true)
               (pkgs.lib.cmakeFeature "SPUN_DEMO_FILE" "${placeholder "out"}/share/spun/First-Light.flac")
