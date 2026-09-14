@@ -100,19 +100,8 @@
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          packages = [
-            pkgs.cmake
-            pkgs.ninja
-            pkgs.pkg-config
-            pkgs.python3
-            pkgs.qt6.qtbase
-            pkgs.qt6.qtdeclarative
-            pkgs.qt6.qtmultimedia
-            pkgs.qt6.qtsvg
-            pkgs.qt6.qtwayland
-            pkgs.qt6.qtquick3d
-            pkgs.taglib
-          ];
+          inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+          packages = [ pkgs.python3 ];
         };
       });
     };
