@@ -17,6 +17,10 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         qt6 = pkgs.qt6;
+        youtubeRuntime = pkgs.python3.withPackages (ps: [
+          ps.ytmusicapi
+          ps.yt-dlp
+        ]);
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
@@ -49,6 +53,12 @@
             "-DBUILD_TESTING=OFF"
             "-DSPUN_ENABLE_3D=ON"
             "-DSPUN_DEMO_FILE=${placeholder "out"}/share/spun/First-Light.flac"
+          ];
+
+          qtWrapperArgs = [
+            "--set-default SPUN_YOUTUBE_PYTHON ${youtubeRuntime}/bin/python3"
+            "--set-default SPUN_YOUTUBE_HELPER ${placeholder "out"}/share/spun/youtube.py"
+            "--prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nodejs ]}"
           ];
 
           desktopItems = [ (pkgs.makeDesktopItem {
