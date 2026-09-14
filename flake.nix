@@ -54,10 +54,10 @@
             ];
 
             cmakeFlags = [
-              "-DCMAKE_BUILD_TYPE=Release"
-              "-DBUILD_TESTING=OFF"
-              "-DSPUN_ENABLE_3D=ON"
-              "-DSPUN_DEMO_FILE=${placeholder "out"}/share/spun/First-Light.flac"
+              (pkgs.lib.cmakeFeature "CMAKE_BUILD_TYPE" "Release")
+              (pkgs.lib.cmakeBool "BUILD_TESTING" false)
+              (pkgs.lib.cmakeBool "SPUN_ENABLE_3D" true)
+              (pkgs.lib.cmakeFeature "SPUN_DEMO_FILE" "${placeholder "out"}/share/spun/First-Light.flac")
             ];
 
             qtWrapperArgs = [
