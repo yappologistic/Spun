@@ -4,6 +4,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 include(CTest)
+include(GNUInstallDirs)
 include(CheckIPOSupported)
 include(CheckCXXSourceCompiles)
 include(CheckLinkerFlag)
@@ -99,6 +100,13 @@ function(spun_application target)
     endif()
 endfunction()
 spun_application(spun)
+install(TARGETS spun RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES assets/First-Light.flac helper/youtube.py
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/spun)
+install(FILES assets/spun-icon.png
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps RENAME spun.png)
+install(FILES LICENSE NOTICE licenses/Sung-MIT.txt
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/spun)
 if(CMAKE_STRIP AND CMAKE_BUILD_TYPE STREQUAL "Release")
     # Debug/RelWithDebInfo builds retain symbols; strip only the shipped Release app.
     add_custom_command(TARGET spun POST_BUILD COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:spun>)
