@@ -44,6 +44,26 @@ sudo dnf install gcc-c++ git cmake ninja-build pkgconf-pkg-config python3 qt6-qt
 ```
 </details>
 
+<details>
+<summary><b>Build dependencies for macOS</b></summary>
+
+Install the [Xcode command line tools](https://developer.apple.com/xcode/resources/) and [Homebrew](https://brew.sh) first:
+
+```bash
+xcode-select --install
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then install the build and runtime dependencies:
+
+```bash
+brew install cmake ninja pkg-config qt taglib python node
+```
+
+`qt` supplies Qt 6.8+ with Quick Controls, Multimedia, SVG and Quick 3D. `node` and `python` are only needed for YouTube Music. `scripts/build.sh` points CMake and `pkg-config` at Homebrew's prefix automatically, so no extra flags are required.
+
+</details>
+
 Spun builds from source; there is no packaged installer yet. You can do so using these commands:
 ```bash
 git clone https://github.com/yappologistic/Spun.git
@@ -55,6 +75,23 @@ cd Spun
 Spun includes 3D when Qt Quick 3D is available. To build without it, add `-DSPUN_ENABLE_3D=OFF` to the build command.
 
 Open **Spun** from your application menu, or run `./scripts/run.sh` from its folder. The launcher points to that folder. If you move it, run `./scripts/install-launcher.sh` again.
+
+<details>
+<summary><b>Installing on macOS</b></summary>
+
+`install-launcher.sh` is for Linux desktops; skip it. The macOS build produces a regular application bundle with Spun's icon at `build/spun.app`:
+
+```bash
+git clone https://github.com/yappologistic/Spun.git
+cd Spun
+./scripts/build.sh -DBUILD_TESTING=OFF
+```
+
+Run it with `./scripts/run.sh`, `open build/spun.app`, or drag `build/spun.app` into `/Applications`. The bundle is not code-signed or notarised, so the first launch of a copy you moved needs **Control-click → Open**, or `xattr -dr com.apple.quarantine /Applications/spun.app`.
+
+Media keys and the macOS Now Playing panel are Linux-only features (Spun uses MPRIS for them); everything else, including the 3D players, works. Preferences live in `~/.config/spun/`.
+
+</details>
 
 <details>
 <summary>Ubuntu 22.04 and 24.04</summary>
@@ -281,7 +318,9 @@ git pull --ff-only
 ./scripts/build.sh -DBUILD_TESTING=OFF
 ```
 
-To remove the application-menu entry:
+On macOS, delete `build/spun.app` and any copy you placed in `/Applications`.
+
+To remove the application-menu entry on Linux:
 
 ```bash
 rm "${XDG_DATA_HOME:-$HOME/.local/share}/applications/spun.desktop"
@@ -312,6 +351,14 @@ ctest --test-dir build --output-on-failure
 ```
 
 Tests use temporary preferences and synthetic local API fixtures. Audio checks need a working user audio session, and API fixtures need permission to listen on loopback. Desktop-control tests use a private D-Bus session. Diagnostics are separate from the normal player.
+
+On macOS the suites that decode audio run under the `cocoa` platform plugin instead of `offscreen`, because Qt's AVFoundation media backend never loads a file without it. They therefore open real windows and need an unlocked graphical session. Keyboard and focus checks only pass while the test window can take focus, so run `ctest` on an idle desktop and do not click elsewhere during the run; they fail in bulk otherwise. For a headless run that keeps every other check deterministic and fails only the audio ones, configure with:
+
+```bash
+./scripts/build.sh -DBUILD_TESTING=ON -DSPUN_MACOS_TEST_PLATFORM=offscreen
+```
+
+The desktop-control test is skipped on macOS, which has no D-Bus session bus.
 
 The registered YouTube test uses local fixtures and needs no network or provider runtime. Run `python3 tests/test_youtube.py` for helper parsing checks. After setting up the optional runtime, `./build/spun --test-youtube-live` checks anonymous browsing, playback, seeking and artwork against the live service with temporary settings. `./scripts/preview-youtube.sh` opens a separate local preview profile with Cider and desktop media registration disabled.
 

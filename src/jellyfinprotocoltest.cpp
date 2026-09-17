@@ -20,6 +20,7 @@ class JellyfinProtocolTest : public QObject {
 private slots:
   void initTestCase() {
     qputenv("XDG_CONFIG_HOME", storage.path().toUtf8());
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QCoreApplication::setOrganizationName("SpunTests");
     QCoreApplication::setApplicationName("jellyfin-protocol");
     QVERIFY(http.listen(QHostAddress::LocalHost));

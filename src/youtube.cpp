@@ -589,8 +589,9 @@ void Youtube::loadCurrent() {
           return;
         const auto file =
             QFileInfo(r.value("file").toString()).canonicalFilePath();
-        if (!r.value("ok").toBool() || file.isEmpty() ||
-            !file.startsWith(directory->path() + "/")) {
+        const auto root = QFileInfo(directory->path()).canonicalFilePath();
+        if (!r.value("ok").toBool() || file.isEmpty() || root.isEmpty() ||
+            !file.startsWith(root + "/")) {
           m_player.failExternal(
               key, "Could not play this song anonymously. It may be "
                    "unavailable, restricted, or YouTube may need a resolver "
@@ -626,7 +627,8 @@ void Youtube::prepareNext() {
             !r.value("ok").toBool())
           return;
         auto file = QFileInfo(r.value("file").toString()).canonicalFilePath();
-        if (!file.startsWith(directory->path() + "/"))
+        const auto root = QFileInfo(directory->path()).canonicalFilePath();
+        if (root.isEmpty() || !file.startsWith(root + "/"))
           return;
         m_preparedKey = key;
         m_prepared = directory;

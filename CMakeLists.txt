@@ -71,8 +71,45 @@ set_source_files_properties(qml/SpunStyle.qml PROPERTIES QT_QML_SINGLETON_TYPE T
 # The font picker is prepared asynchronously on opening Preferences. Its source
 # remains bundled; there is no need to carry another copy as startup bytecode.
 set_source_files_properties(qml/FontPicker.qml PROPERTIES QT_QML_SKIP_CACHEGEN TRUE)
+if(APPLE)
+    # Finder needs an .icns; build one from the shipped PNG with the system tools.
+    set(SPUN_MACOS_ICON "${CMAKE_CURRENT_BINARY_DIR}/spun.icns")
+    set(SPUN_ICONSET "${CMAKE_CURRENT_BINARY_DIR}/spun.iconset")
+    add_custom_command(OUTPUT "${SPUN_MACOS_ICON}"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${SPUN_ICONSET}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SPUN_ICONSET}"
+        COMMAND sips -z 16 16     "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_16x16.png" > /dev/null
+        COMMAND sips -z 32 32     "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_16x16@2x.png" > /dev/null
+        COMMAND sips -z 32 32     "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_32x32.png" > /dev/null
+        COMMAND sips -z 64 64     "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_32x32@2x.png" > /dev/null
+        COMMAND sips -z 128 128   "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_128x128.png" > /dev/null
+        COMMAND sips -z 256 256   "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_128x128@2x.png" > /dev/null
+        COMMAND sips -z 256 256   "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_256x256.png" > /dev/null
+        COMMAND sips -z 512 512   "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_256x256@2x.png" > /dev/null
+        COMMAND sips -z 512 512   "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_512x512.png" > /dev/null
+        COMMAND sips -z 1024 1024 "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png" --out "${SPUN_ICONSET}/icon_512x512@2x.png" > /dev/null
+        COMMAND iconutil -c icns "${SPUN_ICONSET}" -o "${SPUN_MACOS_ICON}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/spun-icon.png"
+        COMMENT "Generating spun.icns" VERBATIM)
+endif()
 function(spun_application target)
     qt_add_executable(${target} src/main.cpp)
+    if(APPLE)
+        # Ship a real .app so Finder, the Dock and Launchpad show Spun's icon.
+        # A bundled binary can be activated by the window server, which the
+        # keyboard-focus checks in the diagnostics build depend on.
+        set_target_properties(${target} PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_BUNDLE_NAME "Spun"
+            MACOSX_BUNDLE_GUI_IDENTIFIER "org.spun.${target}"
+            MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+        if(target STREQUAL "spun")
+            target_sources(${target} PRIVATE "${SPUN_MACOS_ICON}")
+            set_source_files_properties("${SPUN_MACOS_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+            set_target_properties(${target} PROPERTIES MACOSX_BUNDLE_ICON_FILE "spun.icns")
+        endif()
+    endif()
     target_link_libraries(${target} PRIVATE spun_core)
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(${target} PROPERTIES QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode")
@@ -92,7 +129,11 @@ function(spun_application target)
         OPTIONS ${asset_compression})
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE "$<$<CONFIG:Release>:${SPUN_SIZE_OPTIMIZATION};-ffunction-sections;-fdata-sections>")
-        target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections>")
+        if(APPLE)
+            target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:-Wl,-dead_strip>")
+        else()
+            target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:-Wl,--gc-sections>")
+        endif()
         if(SPUN_RELR_RUNTIME AND SPUN_RELR_SUPPORTED)
             target_link_options(${target} PRIVATE "$<$<CONFIG:Release>:LINKER:-z,pack-relative-relocs>")
         endif()
@@ -101,9 +142,25 @@ endfunction()
 spun_application(spun)
 if(CMAKE_STRIP AND CMAKE_BUILD_TYPE STREQUAL "Release")
     # Debug/RelWithDebInfo builds retain symbols; strip only the shipped Release app.
-    add_custom_command(TARGET spun POST_BUILD COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:spun>)
+    if(APPLE)
+        add_custom_command(TARGET spun POST_BUILD COMMAND ${CMAKE_STRIP} -x $<TARGET_FILE:spun>)
+    else()
+        add_custom_command(TARGET spun POST_BUILD COMMAND ${CMAKE_STRIP} --strip-unneeded $<TARGET_FILE:spun>)
+    endif()
 endif()
 if(BUILD_TESTING)
+    if(APPLE)
+        # Qt's darwin multimedia backend only loads media under the cocoa
+        # platform plugin; offscreen leaves QMediaPlayer in LoadingMedia forever.
+        # cocoa opens real windows, so the keyboard checks then need a focused,
+        # idle desktop. Set this to offscreen for a headless run that keeps every
+        # other check deterministic and fails only the audio ones.
+        set(SPUN_MACOS_TEST_PLATFORM "cocoa" CACHE STRING
+            "Qt platform plugin for macOS test suites that decode audio")
+        set(SPUN_AUDIO_PLATFORM "QT_QPA_PLATFORM=${SPUN_MACOS_TEST_PLATFORM}")
+    else()
+        set(SPUN_AUDIO_PLATFORM "QT_QPA_PLATFORM=offscreen")
+    endif()
     find_package(Qt6 REQUIRED COMPONENTS Test)
     spun_application(spun-diagnostics)
     target_sources(spun-diagnostics PRIVATE src/subsonictest.cpp src/jellyfintest.cpp src/youtubetest.cpp src/librarytest.cpp src/librarytest.h src/eventstest.cpp src/mediauitest.cpp src/threedtest.cpp src/artworktest.cpp src/recordertest.cpp src/turntabletest.cpp src/cassettedecktest.cpp src/cddecktest.cpp src/tx6test.cpp)
@@ -119,7 +176,7 @@ if(BUILD_TESTING)
     qt_add_executable(spun-media-test src/mediatest.cpp)
     target_link_libraries(spun-media-test PRIVATE spun_core Qt6::Test)
     find_program(SPUN_DBUS_RUN_SESSION dbus-run-session)
-    if(SPUN_DBUS_RUN_SESSION)
+    if(SPUN_DBUS_RUN_SESSION AND NOT APPLE)
         add_test(NAME spun-desktop-media COMMAND ${SPUN_DBUS_RUN_SESSION} -- $<TARGET_FILE:spun-media-test>)
         set_tests_properties(spun-desktop-media PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")
     endif()
@@ -130,9 +187,9 @@ if(BUILD_TESTING)
     add_test(NAME spun-refresh-independent-motion COMMAND spun-diagnostics --test-performance)
     set_tests_properties(spun-refresh-independent-motion PROPERTIES ENVIRONMENT "SPUN_PERF_TIMING_ONLY=1;QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME=")
     add_test(NAME spun-youtube COMMAND spun --test-youtube)
-    set_tests_properties(spun-youtube PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME=")
+    set_tests_properties(spun-youtube PROPERTIES ENVIRONMENT "${SPUN_AUDIO_PLATFORM};QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME=")
     add_test(NAME spun-playback-and-ui COMMAND spun --self-test)
-    set_tests_properties(spun-playback-and-ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME=")
+    set_tests_properties(spun-playback-and-ui PROPERTIES ENVIRONMENT "${SPUN_AUDIO_PLATFORM};QT_QUICK_BACKEND=software;QSG_RENDER_LOOP=basic;QT_QPA_PLATFORMTHEME=")
 endif()
 
 if(BUILD_TESTING)
@@ -153,7 +210,7 @@ if(BUILD_TESTING)
     qt_add_executable(spun-remote-library-test src/remotelibrarytest.cpp)
     target_link_libraries(spun-remote-library-test PRIVATE spun_core Qt6::Test)
     add_test(NAME spun-remote-library COMMAND spun-remote-library-test)
-    set_tests_properties(spun-remote-library PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=")
+    set_tests_properties(spun-remote-library PROPERTIES ENVIRONMENT "${SPUN_AUDIO_PLATFORM};QT_QPA_PLATFORMTHEME=")
     add_test(NAME spun-immersive-media-ui COMMAND spun --test-media-ui)
     set_tests_properties(spun-remote-library PROPERTIES TIMEOUT 120 LABELS "remote;regression")
     set_tests_properties(spun-immersive-media-ui PROPERTIES

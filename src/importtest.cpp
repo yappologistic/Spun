@@ -3,6 +3,7 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QDataStream>
 #include <QElapsedTimer>
 #include <QSignalSpy>
@@ -41,7 +42,7 @@ int main(int argc, char **argv) {
             .arg(i / 1000, 3, 10, QChar('0')).arg(i / 100, 3, 10, QChar('0'))
             .arg(i, 5, 10, QChar('0')).arg(i % 2 ? "WAV" : "wav");
         if (!makeWave(path)) return 1;
-        if (i == 0) firstFile = path;
+        if (i == 0) firstFile = QFileInfo(path).canonicalFilePath();
         struct stat info{};
         if (::stat(QFile::encodeName(path).constData(), &info) == 0) physicalBytes += quint64(info.st_blocks) * 512;
     }

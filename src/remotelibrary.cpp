@@ -8,6 +8,50 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QTemporaryDir>
+
+namespace {
+#ifdef Q_OS_MACOS
+// Buffered downloads are written to a container-agnostic name. Apple's
+// AVFoundation backend picks its decoder from the file extension and refuses a
+// file without one, so expose the buffer under a matching name as well. The
+// FFmpeg backend used elsewhere sniffs the content and needs none of this.
+QString containerSuffix(const QString &path) {
+  QFile file(path);
+  if (!file.open(QIODevice::ReadOnly))
+    return {};
+  const auto head = file.read(12);
+  if (head.startsWith("fLaC"))
+    return QStringLiteral("flac");
+  if (head.startsWith("OggS"))
+    return QStringLiteral("ogg");
+  if (head.startsWith("RIFF") && head.mid(8, 4) == "WAVE")
+    return QStringLiteral("wav");
+  if (head.mid(4, 4) == "ftyp")
+    return QStringLiteral("m4a");
+  if (head.startsWith("ID3") ||
+      (head.size() > 1 && quint8(head[0]) == 0xFF &&
+       (quint8(head[1]) & 0xE0) == 0xE0))
+    return QStringLiteral("mp3");
+  return {};
+}
+#endif
+// Returns the path the media player should open for a completed download.
+QString playableAudio(const QTemporaryDir &buffer) {
+  const auto raw = buffer.filePath("audio");
+#ifdef Q_OS_MACOS
+  const auto suffix = containerSuffix(raw);
+  if (suffix.isEmpty())
+    return raw;
+  const auto named = raw + '.' + suffix;
+  // The link lives beside the download inside the same temporary directory, so
+  // discarding the buffer still removes both names.
+  if (QFileInfo::exists(named) || QFile::link(raw, named))
+    return named;
+#endif
+  return raw;
+}
+} // namespace
 
 RemoteLibrary::RemoteLibrary(const QString &directory, bool restore,
                              QObject *parent, RemoteMusicApi *api)
@@ -429,7 +473,7 @@ void RemoteLibrary::loadCurrent() {
     m_audioKey = key;
     cancelPrefetch();
     m_player.resolveExternal(key,
-                             QUrl::fromLocalFile(m_audio->filePath("audio")));
+                             QUrl::fromLocalFile(playableAudio(*m_audio)));
     m_prefetchTimer.start();
     return;
   }
@@ -452,7 +496,7 @@ void RemoteLibrary::loadCurrent() {
                    m_audio = buffer;
                    m_audioKey = key;
                    m_player.resolveExternal(
-                       key, QUrl::fromLocalFile(buffer->filePath("audio")));
+                       key, QUrl::fromLocalFile(playableAudio(*buffer)));
                    m_prefetchTimer.start();
                  });
 }
