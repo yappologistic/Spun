@@ -44,6 +44,16 @@ sudo dnf install gcc-c++ git cmake ninja-build pkgconf-pkg-config python3 qt6-qt
 ```
 </details>
 
+<details>
+<summary><b>Build dependencies for openSUSE Tumbleweed</b></summary>
+
+```bash
+sudo zypper install gcc-c++ git cmake ninja pkg-config python3 qt6-base-devel qt6-declarative-devel qt6-multimedia-devel qt6-svg-devel qt6-wayland-devel libtag-devel qt6-quick3d-devel
+```
+
+</details>
+
+
 Spun builds from source; there is no packaged installer yet. You can do so using these commands:
 ```bash
 git clone https://github.com/yappologistic/Spun.git
